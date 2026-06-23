@@ -75,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('ac
     } catch (Throwable $exception) {
         $progress = $leadRepo->jobProgressSummary($batchId === '' ? null : $batchId);
         $progress['status'] = 'failed';
+        $progress['error_message'] = friendly_exception_message($exception);
         json_response([
             'ok' => false,
             'message' => friendly_exception_message($exception),
@@ -142,29 +143,25 @@ function handle_post_actions(
             $matchMode = 'any';
         }
         $batchId = bin2hex(random_bytes(8));
-        $created = 0;
-        foreach ($keywords as $keyword) {
-            $leadRepo->createScrapeJob([
-                'batch_id' => $batchId,
-                'niche' => post_string('niche'),
-                'keywords' => $keyword,
-                'include_terms' => $includeTerms === '' ? null : $includeTerms,
-                'exclude_terms' => $excludeTerms === '' ? null : $excludeTerms,
-                'match_mode' => $matchMode,
-                'category_id' => $categoryId,
-                'min_views' => max(0, post_int('min_views', 0)),
-                'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
-                'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
-                'video_type' => $videoType,
-                'max_pages' => min(20, max(1, post_int('max_pages', 1))),
-                'region_code' => strtoupper(post_string('region_code', 'BR')),
-                'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
-                'order_by' => post_string('order_by', 'relevance'),
-                'published_after' => $publishedAfter === '' ? null : $publishedAfter . ' 00:00:00',
-            ]);
-            $created++;
-        }
-        flash($created . ' busca(s) criada(s). O processamento automatico foi iniciado.');
+        $leadRepo->createScrapeJob([
+            'batch_id' => $batchId,
+            'niche' => post_string('niche'),
+            'keywords' => implode("\n", $keywords),
+            'include_terms' => $includeTerms === '' ? null : $includeTerms,
+            'exclude_terms' => $excludeTerms === '' ? null : $excludeTerms,
+            'match_mode' => $matchMode,
+            'category_id' => $categoryId,
+            'min_views' => max(0, post_int('min_views', 0)),
+            'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
+            'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
+            'video_type' => $videoType,
+            'max_pages' => min(20, max(1, post_int('max_pages', 1))),
+            'region_code' => strtoupper(post_string('region_code', 'BR')),
+            'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
+            'order_by' => post_string('order_by', 'relevance'),
+            'published_after' => $publishedAfter === '' ? null : $publishedAfter . ' 00:00:00',
+        ]);
+        flash('1 busca criada com todas as palavras-chave. O processamento automatico foi iniciado.');
         redirect('?page=jobs&autorun=1&batch_id=' . rawurlencode($batchId));
     }
 
@@ -507,6 +504,7 @@ function jobs_page(LeadRepository $repo, array $categories): void
     echo '<p class="auto-runner-status">' . h(progress_text($progress, $autoRun)) . '</p>';
     echo progress_bar_html((int) $progress['percent'], 'auto-progress');
     echo '<div class="progress-meta"><span class="progress-percent">' . h((string) $progress['percent']) . '%</span><span class="progress-detail">' . h(progress_detail($progress)) . '</span></div>';
+    echo '<p class="auto-runner-error-message">' . h(progress_error_text($progress)) . '</p>';
     echo '<p class="muted">Pode deixar esta pagina aberta. O cron tambem continua processando em segundo plano.</p>';
     echo '</section>';
 
@@ -546,7 +544,7 @@ function jobs_table(array $jobs, bool $actions): void
         echo '</td>';
         echo '<td>' . status_badge((string) $job['status']);
         if (!empty($job['error_message'])) {
-            echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
+            echo '<span class="error-line" title="' . h((string) $job['error_message']) . '">Motivo: ' . h(truncate_text((string) $job['error_message'], 120)) . '</span>';
         }
         echo '</td>';
         echo '<td class="progress-cell">' . progress_bar_html(job_progress_percent($job), 'mini') . '<span>' . h(format_int((int) $job['pages_processed'])) . '/' . h(format_int((int) $job['max_pages'])) . ' paginas</span></td>';
@@ -578,6 +576,7 @@ function auto_runner_script(): void
   var fill = panel.querySelector('.progress-fill');
   var percent = panel.querySelector('.progress-percent');
   var detail = panel.querySelector('.progress-detail');
+  var errorMessage = panel.querySelector('.auto-runner-error-message');
   var badge = panel.querySelector('.auto-runner-badge');
   var csrf = panel.getAttribute('data-csrf') || '';
   var batchId = panel.getAttribute('data-batch-id') || '';
@@ -605,6 +604,9 @@ function auto_runner_script(): void
     if (detail) {
       detail.textContent = Number(progress.processed_pages || 0) + '/' + Number(progress.total_pages || 0) +
         ' paginas, ' + Number(progress.videos_checked || 0) + ' videos, ' + Number(progress.emails_found || 0) + ' e-mails';
+    }
+    if (errorMessage) {
+      errorMessage.textContent = progress.error_message ? 'Motivo: ' + String(progress.error_message) : '';
     }
     if (badge) {
       badge.innerHTML = '<span class="status ' + String(progress.status || 'running') + '">' +
@@ -679,6 +681,9 @@ function auto_runner_script(): void
       .catch(function (error) {
         stopped = true;
         panel.classList.add('auto-runner-error');
+        if (errorMessage) {
+          errorMessage.textContent = 'Motivo: ' + error.message;
+        }
         setStatus(error.message);
       });
   }
@@ -1179,6 +1184,16 @@ function progress_detail(array $progress): string
         format_int((int) ($progress['total_pages'] ?? 0)) . ' paginas, ' .
         format_int((int) ($progress['videos_checked'] ?? 0)) . ' videos, ' .
         format_int((int) ($progress['emails_found'] ?? 0)) . ' e-mails';
+}
+
+function progress_error_text(array $progress): string
+{
+    $message = trim((string) ($progress['error_message'] ?? ''));
+    if ($message === '') {
+        return '';
+    }
+
+    return 'Motivo: ' . truncate_text($message, 220);
 }
 
 function clean_batch_id(string $batchId): string

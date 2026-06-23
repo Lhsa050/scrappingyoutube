@@ -156,6 +156,7 @@ final class LeadRepository
         $activeJobs = $pendingJobs + $runningJobs;
         $percent = $totalPages > 0 ? min(100, (int) round(($processedPages / $totalPages) * 100)) : ($totalJobs > 0 ? 100 : 0);
         $status = $totalJobs === 0 ? 'idle' : ($activeJobs > 0 ? 'running' : ($waitingJobs > 0 ? 'quota_wait' : ($failedJobs > 0 ? 'failed' : 'completed')));
+        $errorMessage = $this->latestJobError($batchId);
 
         return [
             'status' => $status,
@@ -171,7 +172,25 @@ final class LeadRepository
             'processed_pages' => $processedPages,
             'videos_checked' => (int) ($row['videos_checked'] ?? 0),
             'emails_found' => (int) ($row['emails_found'] ?? 0),
+            'error_message' => $errorMessage,
         ];
+    }
+
+    private function latestJobError(?string $batchId = null): string
+    {
+        $sql = 'SELECT error_message FROM scrape_jobs WHERE error_message IS NOT NULL AND error_message <> \'\'';
+        $params = [];
+        if ($batchId !== null && $batchId !== '') {
+            $sql .= ' AND batch_id = :batch_id';
+            $params['batch_id'] = $batchId;
+        }
+        $sql .= ' ORDER BY CASE WHEN status = \'failed\' THEN 0 WHEN status = \'quota_wait\' THEN 1 ELSE 2 END, id DESC LIMIT 1';
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        $message = $stmt->fetchColumn();
+
+        return $message === false ? '' : (string) $message;
     }
 
     public function nextRunnableJob(?int $id = null, ?string $batchId = null): ?array

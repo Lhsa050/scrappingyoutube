@@ -218,7 +218,8 @@ final class ScrapeService
             (string) ($job['niche'] ?? ''),
         ];
 
-        return trim(implode(' ', array_unique(array_filter(array_map('trim', $parts)))));
+        $query = trim(implode(' ', array_unique(array_filter(array_map('trim', $parts)))));
+        return trim(preg_replace('/\s+/', ' ', $query) ?? $query);
     }
 
     private function isQuotaPause(Throwable $exception): bool

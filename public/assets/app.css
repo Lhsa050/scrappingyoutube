@@ -588,6 +588,17 @@ tr:last-child td {
   color: var(--danger);
 }
 
+.auto-runner-error-message {
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.auto-runner-error-message:empty {
+  display: none;
+}
+
 .context-block {
   margin: 12px 0 0;
   padding: 12px;
