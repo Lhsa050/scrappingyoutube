@@ -8,7 +8,7 @@ $repo = new LeadRepository(Database::pdo());
 $settings = new SettingsRepository(Database::pdo());
 $service = new ScrapeService(
     $repo,
-    new YouTubeClient($settings->youtubeApiKeys()),
+    new YouTubeClient($settings->youtubeApiKeys(), (string) $settings->get('youtube_provider', 'auto')),
     new EmailExtractor()
 );
 

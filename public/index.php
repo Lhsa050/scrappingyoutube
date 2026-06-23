@@ -68,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('ac
     try {
         $service = new ScrapeService(
             $leadRepo,
-            new YouTubeClient($settingsRepo->youtubeApiKeys()),
+            new YouTubeClient($settingsRepo->youtubeApiKeys(), (string) $settingsRepo->get('youtube_provider', 'auto')),
             new EmailExtractor()
         );
         json_response(['ok' => true] + $service->processBatch(null, 4, 25, $batchId === '' ? null : $batchId));
@@ -155,7 +155,7 @@ function handle_post_actions(
             'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
             'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
             'video_type' => $videoType,
-            'max_pages' => min(20, max(1, post_int('max_pages', 1))),
+            'max_pages' => min(500, max(1, post_int('max_pages', 1))),
             'region_code' => strtoupper(post_string('region_code', 'BR')),
             'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
             'order_by' => post_string('order_by', 'relevance'),
@@ -168,7 +168,7 @@ function handle_post_actions(
     if ($page === 'jobs' && $action === 'run_job') {
         $service = new ScrapeService(
             $leadRepo,
-            new YouTubeClient($settingsRepo->youtubeApiKeys()),
+            new YouTubeClient($settingsRepo->youtubeApiKeys(), (string) $settingsRepo->get('youtube_provider', 'auto')),
             new EmailExtractor()
         );
         $result = $service->process(post_int('job_id'));
@@ -308,8 +308,14 @@ function handle_post_actions(
     }
 
     if ($page === 'settings' && $action === 'save_youtube_settings') {
+        $provider = post_string('youtube_provider', 'auto');
+        if (!in_array($provider, ['auto', 'api', 'scrape'], true)) {
+            $provider = 'auto';
+        }
+
         $settingsRepo->save([
             'youtube_api_keys' => implode("\n", youtube_keys_input(post_string('youtube_api_keys'))),
+            'youtube_provider' => $provider,
         ]);
         flash('Chaves gratuitas do YouTube salvas.');
         redirect('?page=settings');
@@ -477,36 +483,47 @@ function jobs_page(LeadRepository $repo, array $categories): void
     $autoRun = $runnableJobs > 0;
     $progress = $repo->jobProgressSummary($progressBatchId);
 
-    echo '<section class="topbar"><h1>Buscas no YouTube</h1><p>API oficial, filtros por nicho, views, inscritos e tipo de conteudo.</p></section>';
-    echo '<section class="panel">';
-    echo '<form method="post" class="form-grid">';
+    echo '<section class="jobs-hero"><div><p class="eyebrow">Descoberta automatica</p><h1>Buscas no YouTube</h1><p>API gratuita com fallback para scraping publico, filtros de nicho e progresso em tempo real.</p></div><span>Auto + Scraping publico</span></section>';
+
+    echo '<section class="jobs-workspace">';
+    echo '<div class="panel search-builder">';
+    echo '<div class="panel-head"><h2>Nova busca</h2><span class="muted">1 busca com todas as palavras-chave</span></div>';
+    echo '<form method="post" class="search-form">';
     echo csrf_field() . '<input type="hidden" name="action" value="create_job">';
+    echo '<div class="search-main-grid">';
     input('Nicho', 'niche', 'Dicas de financas');
-    textarea_field('Palavras-chave, uma por linha', 'keywords', "financas pessoais\ninvestimentos para iniciantes\nrenda extra", 5);
-    textarea_field('Termos obrigatorios, um por linha', 'include_terms', '', 3);
-    textarea_field('Termos bloqueados, um por linha', 'exclude_terms', '', 3);
     input('Categoria', 'category', 'Financas');
+    echo '</div>';
+    echo '<div class="textarea-grid">';
+    textarea_box('Palavras-chave, uma por linha', 'keywords', "financas pessoais\ninvestimentos para iniciantes\nrenda extra", 5);
+    textarea_box('Termos obrigatorios', 'include_terms', '', 5);
+    textarea_box('Termos bloqueados', 'exclude_terms', '', 5);
+    echo '</div>';
+    echo '<div class="filter-grid">';
     select_field('Precisao dos termos', 'match_mode', ['any' => 'Qualquer termo obrigatorio', 'all' => 'Todos os termos obrigatorios'], 'any');
     select_field('Tipo de conteudo', 'video_type', ['both' => 'Videos e Shorts', 'video' => 'Somente videos', 'short' => 'Somente Shorts'], 'both');
     input('Views minimas', 'min_views', '10000', 'number');
     input('Views maximas', 'max_views', '100000', 'number');
     input('Inscritos maximos', 'max_subscribers', '30000', 'number');
-    input('Paginas', 'max_pages', '3', 'number');
+    input('Paginas', 'max_pages', '25', 'number');
     select_field('Ordenacao', 'order_by', ['relevance' => 'Relevancia', 'viewCount' => 'Mais vistos', 'date' => 'Recentes'], 'relevance');
     input('Pais', 'region_code', 'BR');
     input('Idioma', 'relevance_language', 'pt');
     input('Publicado apos', 'published_after', '', 'date');
+    echo '</div>';
     echo '<div class="form-actions"><button type="submit">Criar busca</button></div>';
-    echo '</form></section>';
+    echo '</form></div>';
 
-    echo '<section class="panel auto-runner" data-auto-runner="' . ($autoRun ? '1' : '0') . '" data-batch-id="' . h($batchId) . '" data-csrf="' . h(csrf_token()) . '">';
-    echo '<div class="panel-head"><h2>Processamento automatico</h2><span class="auto-runner-badge">' . status_badge((string) $progress['status']) . '</span></div>';
+    echo '<aside class="panel progress-panel auto-runner" data-auto-runner="' . ($autoRun ? '1' : '0') . '" data-batch-id="' . h($batchId) . '" data-csrf="' . h(csrf_token()) . '">';
+    echo '<div class="panel-head"><h2>Progresso</h2><span class="auto-runner-badge">' . status_badge((string) $progress['status']) . '</span></div>';
+    echo '<div class="progress-score"><strong class="progress-percent">' . h((string) $progress['percent']) . '%</strong><span>concluido</span></div>';
     echo '<p class="auto-runner-status">' . h(progress_text($progress, $autoRun)) . '</p>';
     echo progress_bar_html((int) $progress['percent'], 'auto-progress');
-    echo '<div class="progress-meta"><span class="progress-percent">' . h((string) $progress['percent']) . '%</span><span class="progress-detail">' . h(progress_detail($progress)) . '</span></div>';
+    echo '<div class="progress-meta"><span class="progress-detail">' . h(progress_detail($progress)) . '</span></div>';
     echo '<p class="auto-runner-error-message">' . h(progress_error_text($progress)) . '</p>';
-    echo '<p class="muted">Pode deixar esta pagina aberta. O cron tambem continua processando em segundo plano.</p>';
-    echo '</section>';
+    echo '<div class="progress-stats"><span><strong>' . h(format_int((int) $progress['total_jobs'])) . '</strong> busca</span><span><strong>' . h(format_int((int) $progress['videos_checked'])) . '</strong> videos</span><span><strong>' . h(format_int((int) $progress['emails_found'])) . '</strong> e-mails</span></div>';
+    echo '<p class="muted">Pode fechar o navegador: o cron continua de onde parou.</p>';
+    echo '</aside></section>';
 
     echo '<section class="panel"><div class="panel-head"><h2>Historico</h2></div>';
     jobs_table($repo->recentJobs(30), true);
@@ -940,8 +957,13 @@ function settings_page(SettingsRepository $settingsRepo): void
     echo '<div class="panel-head"><h2>YouTube gratis</h2><span class="status ' . ($youtubeKeys === [] ? 'pending' : 'completed') . '">' . h(format_int(count($youtubeKeys))) . ' chave(s)</span></div>';
     echo '<form method="post" class="stack-form">';
     echo csrf_field();
+    echo '<label>Modo de coleta<select name="youtube_provider">';
+    foreach (['auto' => 'Auto: API gratis + scraping publico', 'api' => 'Somente API oficial', 'scrape' => 'Somente scraping publico'] as $value => $label) {
+        echo '<option value="' . h($value) . '"' . (($settings['youtube_provider'] ?? 'auto') === $value ? ' selected' : '') . '>' . h($label) . '</option>';
+    }
+    echo '</select></label>';
     echo '<label>Chaves da YouTube Data API, uma por linha<textarea name="youtube_api_keys" rows="5">' . h((string) $settings['youtube_api_keys']) . '</textarea></label>';
-    echo '<p class="muted">O sistema usa somente chaves gratuitas da API oficial. Quando uma chave bater quota, tenta a proxima automaticamente.</p>';
+    echo '<p class="muted">No modo Auto, o sistema usa chaves gratuitas enquanto houver quota e cai para scraping publico quando a API limitar.</p>';
     echo '<div class="form-actions"><button type="submit" name="action" value="save_youtube_settings">Salvar chaves</button></div>';
     echo '</form>';
     echo '</section>';
@@ -1023,6 +1045,11 @@ function input(string $label, string $name, string $value = '', string $type = '
 function textarea_field(string $label, string $name, string $value = '', int $rows = 4): void
 {
     echo '<label class="wide">' . h($label) . '<textarea name="' . h($name) . '" rows="' . h((string) $rows) . '">' . h($value) . '</textarea></label>';
+}
+
+function textarea_box(string $label, string $name, string $value = '', int $rows = 4): void
+{
+    echo '<label>' . h($label) . '<textarea name="' . h($name) . '" rows="' . h((string) $rows) . '">' . h($value) . '</textarea></label>';
 }
 
 function settings_input(string $label, string $name, string $value = '', string $type = 'text'): void

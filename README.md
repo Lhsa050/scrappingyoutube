@@ -13,6 +13,8 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 - Dashboard operacional com leads ativos, qualificados, ignorados, fila, envios e falhas.
 - Processamento automatico das buscas pelo painel e por cron, com barra de progresso por lote.
 - Rotacao gratuita de varias chaves da YouTube Data API, com pausa automatica quando todas atingem quota.
+- Fallback gratuito por scraping publico do YouTube quando a API oficial limitar.
+- Tela de buscas redesenhada com progresso visual grande e historico mais legivel.
 - Limpeza de historico de buscas e opcao de apagar todos os dados operacionais pelo painel.
 - Campanhas com variaveis como `{{creator_name}}`, `{{niche}}`, `{{product_name}}`, `{{commission}}` e `{{unsubscribe_url}}`.
 - Fila de envio SMTP com limite por execucao.
@@ -128,12 +130,20 @@ Se o repositorio for privado, crie um token GitHub com permissao de leitura de c
 
 ## Modo gratuito anti-travamento
 
-O sistema usa somente a YouTube Data API oficial no modo gratuito. Para reduzir pausas por quota, crie mais de uma chave gratuita no Google Cloud e cole todas em `Configuracoes > YouTube gratis`, uma por linha.
+O sistema usa modo gratuito com provedores em cascata. Para reduzir pausas por quota, crie mais de uma chave gratuita no Google Cloud e cole todas em `Configuracoes > YouTube gratis`, uma por linha.
+
+Modos disponiveis:
+
+- `Auto`: usa API oficial gratuita enquanto houver quota e cai para scraping publico quando limitar.
+- `Somente API oficial`: usa apenas as chaves gratuitas.
+- `Somente scraping publico`: ignora chaves e busca por paginas publicas do YouTube.
+
+No scraping publico, cada pagina usa uma variacao da consulta para ampliar a descoberta sem gastar quota da API. Isso permite volume muito maior, mas ainda depende da disponibilidade das paginas publicas do YouTube e dos limites da hospedagem.
 
 Durante a busca:
 
 - se uma chave atingir quota, o sistema tenta a proxima;
-- se todas atingirem quota, a busca entra em `aguardando quota`;
+- se todas atingirem quota, o modo Auto tenta scraping publico;
 - o progresso fica salvo no banco;
 - se houver falha, o painel mostra o motivo no bloco de processamento e no historico;
 - o cron e o painel tentam continuar automaticamente depois.
