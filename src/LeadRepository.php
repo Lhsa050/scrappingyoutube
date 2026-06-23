@@ -46,13 +46,17 @@ final class LeadRepository
         $now = Database::now();
         $stmt = $this->pdo->prepare(
             'INSERT INTO scrape_jobs
-             (niche, keywords, category_id, min_views, max_views, max_subscribers, video_type, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
+             (batch_id, niche, keywords, include_terms, exclude_terms, match_mode, category_id, min_views, max_views, max_subscribers, video_type, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
              VALUES
-             (:niche, :keywords, :category_id, :min_views, :max_views, :max_subscribers, :video_type, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
+             (:batch_id, :niche, :keywords, :include_terms, :exclude_terms, :match_mode, :category_id, :min_views, :max_views, :max_subscribers, :video_type, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
         );
         $stmt->execute([
+            'batch_id' => $data['batch_id'] ?? null,
             'niche' => $data['niche'],
             'keywords' => $data['keywords'],
+            'include_terms' => $data['include_terms'] ?? null,
+            'exclude_terms' => $data['exclude_terms'] ?? null,
+            'match_mode' => $data['match_mode'] ?? 'any',
             'category_id' => $data['category_id'],
             'min_views' => $data['min_views'],
             'max_views' => $data['max_views'],
@@ -88,14 +92,86 @@ final class LeadRepository
         return $stmt->fetchAll();
     }
 
-    public function runnableJobsCount(): int
+    public function runnableJobsCount(?string $batchId = null): int
     {
-        return (int) $this->pdo->query(
-            'SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')'
-        )->fetchColumn();
+        $sql = 'SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')';
+        $params = [];
+        if ($batchId !== null && $batchId !== '') {
+            $sql .= ' AND batch_id = :batch_id';
+            $params['batch_id'] = $batchId;
+        }
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return (int) $stmt->fetchColumn();
     }
 
-    public function nextRunnableJob(?int $id = null): ?array
+    public function latestRunnableBatchId(): ?string
+    {
+        $stmt = $this->pdo->query(
+            'SELECT batch_id FROM scrape_jobs
+             WHERE status IN (\'pending\', \'running\') AND batch_id IS NOT NULL AND batch_id <> \'\'
+             ORDER BY id DESC
+             LIMIT 1'
+        );
+        $batchId = $stmt->fetchColumn();
+        return $batchId === false ? null : (string) $batchId;
+    }
+
+    /**
+     * @return array<string, int|string|bool>
+     */
+    public function jobProgressSummary(?string $batchId = null): array
+    {
+        $where = '';
+        $params = [];
+        if ($batchId !== null && $batchId !== '') {
+            $where = 'WHERE batch_id = :batch_id';
+            $params['batch_id'] = $batchId;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) AS total_jobs,
+                    COALESCE(SUM(max_pages), 0) AS total_pages,
+                    COALESCE(SUM(CASE WHEN pages_processed > max_pages THEN max_pages ELSE pages_processed END), 0) AS processed_pages,
+                    COALESCE(SUM(videos_checked), 0) AS videos_checked,
+                    COALESCE(SUM(emails_found), 0) AS emails_found,
+                    COALESCE(SUM(CASE WHEN status = \'pending\' THEN 1 ELSE 0 END), 0) AS pending_jobs,
+                    COALESCE(SUM(CASE WHEN status = \'running\' THEN 1 ELSE 0 END), 0) AS running_jobs,
+                    COALESCE(SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END), 0) AS completed_jobs,
+                    COALESCE(SUM(CASE WHEN status = \'failed\' THEN 1 ELSE 0 END), 0) AS failed_jobs
+             FROM scrape_jobs ' . $where
+        );
+        $stmt->execute($params);
+        $row = $stmt->fetch() ?: [];
+
+        $totalJobs = (int) ($row['total_jobs'] ?? 0);
+        $totalPages = (int) ($row['total_pages'] ?? 0);
+        $processedPages = (int) ($row['processed_pages'] ?? 0);
+        $pendingJobs = (int) ($row['pending_jobs'] ?? 0);
+        $runningJobs = (int) ($row['running_jobs'] ?? 0);
+        $failedJobs = (int) ($row['failed_jobs'] ?? 0);
+        $activeJobs = $pendingJobs + $runningJobs;
+        $percent = $totalPages > 0 ? min(100, (int) round(($processedPages / $totalPages) * 100)) : ($totalJobs > 0 ? 100 : 0);
+        $status = $totalJobs === 0 ? 'idle' : ($activeJobs > 0 ? 'running' : ($failedJobs > 0 ? 'failed' : 'completed'));
+
+        return [
+            'status' => $status,
+            'active' => $activeJobs > 0,
+            'percent' => $percent,
+            'total_jobs' => $totalJobs,
+            'pending_jobs' => $pendingJobs,
+            'running_jobs' => $runningJobs,
+            'completed_jobs' => (int) ($row['completed_jobs'] ?? 0),
+            'failed_jobs' => $failedJobs,
+            'total_pages' => $totalPages,
+            'processed_pages' => $processedPages,
+            'videos_checked' => (int) ($row['videos_checked'] ?? 0),
+            'emails_found' => (int) ($row['emails_found'] ?? 0),
+        ];
+    }
+
+    public function nextRunnableJob(?int $id = null, ?string $batchId = null): ?array
     {
         if ($id !== null) {
             $stmt = $this->pdo->prepare(
@@ -106,9 +182,16 @@ final class LeadRepository
             return $job ?: null;
         }
 
-        $stmt = $this->pdo->query(
-            'SELECT * FROM scrape_jobs WHERE status IN (\'pending\', \'running\') ORDER BY id ASC LIMIT 1'
-        );
+        $sql = 'SELECT * FROM scrape_jobs WHERE status IN (\'pending\', \'running\')';
+        $params = [];
+        if ($batchId !== null && $batchId !== '') {
+            $sql .= ' AND batch_id = :batch_id';
+            $params['batch_id'] = $batchId;
+        }
+        $sql .= ' ORDER BY id ASC LIMIT 1';
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
         $job = $stmt->fetch();
         return $job ?: null;
     }
@@ -437,6 +520,57 @@ final class LeadRepository
 
         $this->pdo->exec('DELETE FROM leads');
         return $total;
+    }
+
+    public function deleteSearchHistory(): int
+    {
+        $total = (int) $this->pdo->query('SELECT COUNT(*) FROM scrape_jobs')->fetchColumn();
+        if ($total === 0) {
+            return 0;
+        }
+
+        $this->pdo->exec('DELETE FROM scrape_jobs');
+        return $total;
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function deleteAllOperationalData(): array
+    {
+        $counts = [
+            'leads' => (int) $this->pdo->query('SELECT COUNT(*) FROM leads')->fetchColumn(),
+            'videos' => (int) $this->pdo->query('SELECT COUNT(*) FROM videos')->fetchColumn(),
+            'channels' => (int) $this->pdo->query('SELECT COUNT(*) FROM channels')->fetchColumn(),
+            'jobs' => (int) $this->pdo->query('SELECT COUNT(*) FROM scrape_jobs')->fetchColumn(),
+            'campaigns' => (int) $this->pdo->query('SELECT COUNT(*) FROM campaigns')->fetchColumn(),
+            'queued_emails' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue')->fetchColumn(),
+            'suppressed' => (int) $this->pdo->query('SELECT COUNT(*) FROM suppression_list')->fetchColumn(),
+        ];
+
+        $this->pdo->beginTransaction();
+        try {
+            foreach ([
+                'email_events',
+                'email_queue',
+                'campaigns',
+                'lead_sources',
+                'leads',
+                'videos',
+                'channels',
+                'scrape_jobs',
+                'suppression_list',
+                'categories',
+            ] as $table) {
+                $this->pdo->exec('DELETE FROM ' . $table);
+            }
+            $this->pdo->commit();
+        } catch (Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
+
+        return $counts;
     }
 
     public function exportLeadsCsv(array $filters = []): never

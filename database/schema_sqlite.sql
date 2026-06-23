@@ -72,8 +72,12 @@ CREATE INDEX IF NOT EXISTS lead_sources_video_id_idx ON lead_sources(video_id);
 
 CREATE TABLE IF NOT EXISTS scrape_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id TEXT NULL,
   niche TEXT NOT NULL,
   keywords TEXT NOT NULL,
+  include_terms TEXT NULL,
+  exclude_terms TEXT NULL,
+  match_mode TEXT NOT NULL DEFAULT 'any',
   category_id INTEGER NOT NULL,
   min_views INTEGER NOT NULL DEFAULT 0,
   max_views INTEGER NULL,
@@ -97,6 +101,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT
 );
 
+CREATE INDEX IF NOT EXISTS scrape_jobs_batch_id_idx ON scrape_jobs(batch_id);
 CREATE INDEX IF NOT EXISTS scrape_jobs_status_idx ON scrape_jobs(status);
 
 CREATE TABLE IF NOT EXISTS campaigns (

@@ -449,6 +449,11 @@ tr:last-child td {
   color: var(--info);
 }
 
+.status.idle {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .error-line {
   color: var(--danger);
   display: block;
@@ -527,6 +532,52 @@ tr:last-child td {
   font-weight: 750;
 }
 
+.progress-bar {
+  width: 100%;
+  height: 12px;
+  border: 1px solid #cfe0d5;
+  border-radius: 999px;
+  background: #eef4ed;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), #4d9272);
+  display: block;
+  transition: width 240ms ease;
+}
+
+.progress-meta {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.progress-percent {
+  color: var(--accent-strong);
+  font-weight: 850;
+}
+
+.progress-cell {
+  min-width: 150px;
+}
+
+.progress-cell .progress-bar {
+  max-width: 130px;
+  height: 8px;
+  margin-bottom: 6px;
+}
+
+.progress-cell .progress-fill {
+  background: var(--accent);
+}
+
 .auto-runner-error {
   border-color: #e8c6c6;
   background: #fffafa;
@@ -552,6 +603,27 @@ tr:last-child td {
 
 .danger-form {
   margin-top: 6px;
+}
+
+.danger-zone {
+  border-color: #e8c6c6;
+}
+
+.cleanup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cleanup-grid form {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface-soft);
+}
+
+.cleanup-grid strong {
+  font-size: 15px;
 }
 
 .notes,
@@ -619,7 +691,8 @@ tr:last-child td {
   .metrics,
   .metrics.compact,
   .form-grid,
-  .campaign-form {
+  .campaign-form,
+  .cleanup-grid {
     grid-template-columns: 1fr;
   }
 

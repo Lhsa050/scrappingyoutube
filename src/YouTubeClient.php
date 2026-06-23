@@ -66,7 +66,7 @@ final class YouTubeClient
         }
 
         $response = $this->request('channels', [
-            'part' => 'statistics',
+            'part' => 'statistics,snippet',
             'id' => implode(',', array_slice($ids, 0, 50)),
             'key' => $this->apiKey,
         ]);
@@ -111,8 +111,12 @@ final class YouTubeClient
             $error = curl_error($curl);
             curl_close($curl);
 
-            if ($body === false || $status >= 400) {
+            if ($body === false) {
                 throw new RuntimeException($error !== '' ? $error : 'Falha HTTP ao consultar YouTube.');
+            }
+
+            if ($status >= 400 && (string) $body === '') {
+                throw new RuntimeException('Falha HTTP ao consultar YouTube. HTTP ' . $status . '.');
             }
 
             return (string) $body;
@@ -121,6 +125,7 @@ final class YouTubeClient
         $context = stream_context_create([
             'http' => [
                 'timeout' => 35,
+                'ignore_errors' => true,
                 'header' => "User-Agent: CreatorOutreachCRM/1.0\r\n",
             ],
         ]);

@@ -69,8 +69,12 @@ CREATE TABLE IF NOT EXISTS lead_sources (
 
 CREATE TABLE IF NOT EXISTS scrape_jobs (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  batch_id VARCHAR(40) NULL,
   niche VARCHAR(180) NOT NULL,
   keywords VARCHAR(500) NOT NULL,
+  include_terms TEXT NULL,
+  exclude_terms TEXT NULL,
+  match_mode VARCHAR(20) NOT NULL DEFAULT 'any',
   category_id INT UNSIGNED NOT NULL,
   min_views BIGINT UNSIGNED NOT NULL DEFAULT 0,
   max_views BIGINT UNSIGNED NULL,
@@ -91,6 +95,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   finished_at DATETIME NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
+  INDEX scrape_jobs_batch_id_idx (batch_id),
   INDEX scrape_jobs_status_idx (status),
   CONSTRAINT scrape_jobs_category_id_fk FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -16,9 +16,9 @@ final class ScrapeService
      *
      * @return array{job_id:int, status:string, videos_checked:int, emails_found:int}
      */
-    public function process(?int $jobId = null): array
+    public function process(?int $jobId = null, ?string $batchId = null): array
     {
-        $job = $this->leads->nextRunnableJob($jobId);
+        $job = $this->leads->nextRunnableJob($jobId, $batchId);
         if (!$job) {
             return ['job_id' => 0, 'status' => 'idle', 'videos_checked' => 0, 'emails_found' => 0];
         }
@@ -38,7 +38,7 @@ final class ScrapeService
             }
 
             $search = $this->youtube->searchVideos([
-                'q' => (string) $job['keywords'],
+                'q' => $this->searchQuery($job),
                 'order' => (string) $job['order_by'],
                 'pageToken' => $job['next_page_token'] ?? null,
                 'regionCode' => $job['region_code'] ?? null,
@@ -99,6 +99,10 @@ final class ScrapeService
                     continue;
                 }
 
+                if (!$this->matchesPrecisionFilters($video, $channel, $job)) {
+                    continue;
+                }
+
                 $description = (string) ($snippet['description'] ?? '');
                 $emails = $this->extractor->extract($description);
                 if ($emails === []) {
@@ -150,9 +154,9 @@ final class ScrapeService
     /**
      * Processa varias paginas em lote, respeitando limite de passos e tempo.
      *
-     * @return array{status:string, steps:int, videos_checked:int, emails_found:int, keep_running:bool, last_job_id:int}
+     * @return array{status:string, steps:int, videos_checked:int, emails_found:int, keep_running:bool, last_job_id:int, progress:array<string, int|string|bool>}
      */
-    public function processBatch(?int $jobId = null, int $maxSteps = 6, int $maxSeconds = 35): array
+    public function processBatch(?int $jobId = null, int $maxSteps = 6, int $maxSeconds = 35, ?string $batchId = null): array
     {
         $maxSteps = max(1, $maxSteps);
         $maxSeconds = max(5, $maxSeconds);
@@ -164,7 +168,7 @@ final class ScrapeService
         $specificJob = $jobId !== null;
 
         while ($steps < $maxSteps && (time() - $startedAt) < $maxSeconds) {
-            $result = $this->process($jobId);
+            $result = $this->process($jobId, $batchId);
             if ($result['status'] === 'idle') {
                 break;
             }
@@ -184,9 +188,84 @@ final class ScrapeService
             'steps' => $steps,
             'videos_checked' => $videosChecked,
             'emails_found' => $emailsFound,
-            'keep_running' => $this->leads->runnableJobsCount() > 0,
+            'keep_running' => $this->leads->runnableJobsCount($batchId) > 0,
             'last_job_id' => $lastJobId,
+            'progress' => $this->leads->jobProgressSummary($batchId),
         ];
+    }
+
+    private function searchQuery(array $job): string
+    {
+        $parts = [
+            (string) ($job['keywords'] ?? ''),
+            (string) ($job['niche'] ?? ''),
+        ];
+
+        return trim(implode(' ', array_unique(array_filter(array_map('trim', $parts)))));
+    }
+
+    private function matchesPrecisionFilters(array $video, array $channel, array $job): bool
+    {
+        $snippet = $video['snippet'] ?? [];
+        $text = $this->matchText(implode(' ', [
+            (string) ($snippet['title'] ?? ''),
+            (string) ($snippet['description'] ?? ''),
+            (string) ($snippet['channelTitle'] ?? ''),
+            (string) ($channel['snippet']['title'] ?? ''),
+        ]));
+
+        foreach ($this->terms((string) ($job['exclude_terms'] ?? '')) as $term) {
+            if ($term !== '' && str_contains($text, $term)) {
+                return false;
+            }
+        }
+
+        $includeTerms = $this->terms((string) ($job['include_terms'] ?? ''));
+        if ($includeTerms === []) {
+            return true;
+        }
+
+        $matches = 0;
+        foreach ($includeTerms as $term) {
+            if ($term !== '' && str_contains($text, $term)) {
+                $matches++;
+            }
+        }
+
+        return (string) ($job['match_mode'] ?? 'any') === 'all'
+            ? $matches === count($includeTerms)
+            : $matches > 0;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function terms(string $value): array
+    {
+        $lines = preg_split('/\R+/', $value) ?: [];
+        $terms = [];
+        foreach ($lines as $line) {
+            $term = $this->matchText($line);
+            if ($term !== '') {
+                $terms[$term] = $term;
+            }
+        }
+
+        return array_values($terms);
+    }
+
+    private function matchText(string $value): string
+    {
+        $value = trim(preg_replace('/\s+/', ' ', $value) ?? '');
+        $value = function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+        if (function_exists('iconv')) {
+            $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
+            if (is_string($ascii) && $ascii !== '') {
+                $value = strtolower($ascii);
+            }
+        }
+
+        return $value;
     }
 
     private function channelIsInsideSubscriberLimit(array $channel, int $maxSubscribers): bool

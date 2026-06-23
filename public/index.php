@@ -64,16 +64,22 @@ if ($page === 'leads' && ($_GET['export'] ?? '') === 'csv') {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('action') === 'run_auto_batch') {
+    $batchId = clean_batch_id(post_string('batch_id'));
     try {
         $service = new ScrapeService(
             $leadRepo,
             new YouTubeClient((string) Config::get('YOUTUBE_API_KEY', '')),
             new EmailExtractor()
         );
-        json_response(['ok' => true] + $service->processBatch(null, 4, 25));
+        json_response(['ok' => true] + $service->processBatch(null, 4, 25, $batchId === '' ? null : $batchId));
     } catch (Throwable $exception) {
-        http_response_code(500);
-        json_response(['ok' => false, 'message' => $exception->getMessage()]);
+        $progress = $leadRepo->jobProgressSummary($batchId === '' ? null : $batchId);
+        $progress['status'] = 'failed';
+        json_response([
+            'ok' => false,
+            'message' => friendly_exception_message($exception),
+            'progress' => $progress,
+        ]);
     }
 }
 
@@ -129,11 +135,22 @@ function handle_post_actions(
         if (!in_array($videoType, ['both', 'video', 'short'], true)) {
             $videoType = 'both';
         }
+        $includeTerms = implode("\n", split_keywords_input(post_string('include_terms')));
+        $excludeTerms = implode("\n", split_keywords_input(post_string('exclude_terms')));
+        $matchMode = post_string('match_mode', 'any');
+        if (!in_array($matchMode, ['any', 'all'], true)) {
+            $matchMode = 'any';
+        }
+        $batchId = bin2hex(random_bytes(8));
         $created = 0;
         foreach ($keywords as $keyword) {
             $leadRepo->createScrapeJob([
+                'batch_id' => $batchId,
                 'niche' => post_string('niche'),
                 'keywords' => $keyword,
+                'include_terms' => $includeTerms === '' ? null : $includeTerms,
+                'exclude_terms' => $excludeTerms === '' ? null : $excludeTerms,
+                'match_mode' => $matchMode,
                 'category_id' => $categoryId,
                 'min_views' => max(0, post_int('min_views', 0)),
                 'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
@@ -148,7 +165,7 @@ function handle_post_actions(
             $created++;
         }
         flash($created . ' busca(s) criada(s). O processamento automatico foi iniciado.');
-        redirect('?page=jobs&autorun=1');
+        redirect('?page=jobs&autorun=1&batch_id=' . rawurlencode($batchId));
     }
 
     if ($page === 'jobs' && $action === 'run_job') {
@@ -159,6 +176,27 @@ function handle_post_actions(
         );
         $result = $service->process(post_int('job_id'));
         flash('Busca processada: ' . $result['videos_checked'] . ' videos, ' . $result['emails_found'] . ' e-mails.');
+        redirect('?page=jobs');
+    }
+
+    if ($page === 'jobs' && $action === 'clear_jobs') {
+        $deleted = $leadRepo->deleteSearchHistory();
+        flash($deleted . ' busca(s) removida(s) do historico.');
+        redirect('?page=jobs');
+    }
+
+    if ($page === 'jobs' && $action === 'wipe_operational_data') {
+        if (strtoupper(post_string('confirm_delete')) !== 'APAGAR') {
+            throw new RuntimeException('Digite APAGAR para confirmar a limpeza total.');
+        }
+
+        $counts = $leadRepo->deleteAllOperationalData();
+        flash(
+            'Dados apagados: ' . format_int($counts['leads']) . ' leads, ' .
+            format_int($counts['videos']) . ' videos, ' .
+            format_int($counts['jobs']) . ' buscas e ' .
+            format_int($counts['campaigns']) . ' campanhas.'
+        );
         redirect('?page=jobs');
     }
 
@@ -421,16 +459,25 @@ function metric(string $label, string $value, string $detail = ''): void
 
 function jobs_page(LeadRepository $repo, array $categories): void
 {
-    $runnableJobs = $repo->runnableJobsCount();
+    $batchId = clean_batch_id((string) ($_GET['batch_id'] ?? ''));
+    if ($batchId === '') {
+        $batchId = (string) ($repo->latestRunnableBatchId() ?? '');
+    }
+    $progressBatchId = $batchId === '' ? null : $batchId;
+    $runnableJobs = $repo->runnableJobsCount($progressBatchId);
     $autoRun = $runnableJobs > 0;
+    $progress = $repo->jobProgressSummary($progressBatchId);
 
-    echo '<section class="topbar"><h1>Buscas no YouTube</h1><p>API oficial, filtros por views e origem registrada.</p></section>';
+    echo '<section class="topbar"><h1>Buscas no YouTube</h1><p>API oficial, filtros por nicho, views, inscritos e tipo de conteudo.</p></section>';
     echo '<section class="panel">';
     echo '<form method="post" class="form-grid">';
     echo csrf_field() . '<input type="hidden" name="action" value="create_job">';
     input('Nicho', 'niche', 'Dicas de financas');
     textarea_field('Palavras-chave, uma por linha', 'keywords', "financas pessoais\ninvestimentos para iniciantes\nrenda extra", 5);
+    textarea_field('Termos obrigatorios, um por linha', 'include_terms', '', 3);
+    textarea_field('Termos bloqueados, um por linha', 'exclude_terms', '', 3);
     input('Categoria', 'category', 'Financas');
+    select_field('Precisao dos termos', 'match_mode', ['any' => 'Qualquer termo obrigatorio', 'all' => 'Todos os termos obrigatorios'], 'any');
     select_field('Tipo de conteudo', 'video_type', ['both' => 'Videos e Shorts', 'video' => 'Somente videos', 'short' => 'Somente Shorts'], 'both');
     input('Views minimas', 'min_views', '10000', 'number');
     input('Views maximas', 'max_views', '100000', 'number');
@@ -443,34 +490,54 @@ function jobs_page(LeadRepository $repo, array $categories): void
     echo '<div class="form-actions"><button type="submit">Criar busca</button></div>';
     echo '</form></section>';
 
-    echo '<section class="panel auto-runner" data-auto-runner="' . ($autoRun ? '1' : '0') . '" data-csrf="' . h(csrf_token()) . '">';
-    echo '<div class="panel-head"><h2>Processamento automatico</h2>' . status_badge($autoRun ? 'running' : 'completed') . '</div>';
-    echo '<p class="auto-runner-status">' . ($autoRun ? 'Rodando buscas pendentes automaticamente...' : 'Nenhuma busca pendente no momento.') . '</p>';
-    echo '<p class="muted">Voce pode deixar esta pagina aberta para processar ate o final. O cron tambem continua processando em segundo plano.</p>';
+    echo '<section class="panel auto-runner" data-auto-runner="' . ($autoRun ? '1' : '0') . '" data-batch-id="' . h($batchId) . '" data-csrf="' . h(csrf_token()) . '">';
+    echo '<div class="panel-head"><h2>Processamento automatico</h2><span class="auto-runner-badge">' . status_badge((string) $progress['status']) . '</span></div>';
+    echo '<p class="auto-runner-status">' . h(progress_text($progress, $autoRun)) . '</p>';
+    echo progress_bar_html((int) $progress['percent'], 'auto-progress');
+    echo '<div class="progress-meta"><span class="progress-percent">' . h((string) $progress['percent']) . '%</span><span class="progress-detail">' . h(progress_detail($progress)) . '</span></div>';
+    echo '<p class="muted">Pode deixar esta pagina aberta. O cron tambem continua processando em segundo plano.</p>';
     echo '</section>';
 
     echo '<section class="panel"><div class="panel-head"><h2>Historico</h2></div>';
     jobs_table($repo->recentJobs(30), true);
     echo '</section>';
 
+    echo '<section class="panel danger-zone"><div class="panel-head"><h2>Limpeza de dados</h2></div>';
+    echo '<div class="cleanup-grid">';
+    echo '<form method="post" class="stack-form" onsubmit="return confirm(\'Limpar todo o historico de buscas?\')">';
+    echo csrf_field() . '<input type="hidden" name="action" value="clear_jobs">';
+    echo '<strong>Historico de buscas</strong><p class="muted">Remove somente as buscas criadas e os erros antigos. Leads, videos e campanhas continuam salvos.</p>';
+    echo '<button type="submit" class="secondary">Limpar historico</button></form>';
+    echo '<form method="post" class="stack-form danger-form" onsubmit="return confirm(\'Apagar todos os dados coletados e campanhas? Esta acao nao pode ser desfeita.\')">';
+    echo csrf_field() . '<input type="hidden" name="action" value="wipe_operational_data">';
+    echo '<strong>Todos os dados operacionais</strong><p class="muted">Remove leads, fontes, videos, canais, buscas, campanhas, fila de e-mails, bloqueios e categorias. Configuracoes, login e atualizador ficam preservados.</p>';
+    echo '<input type="text" name="confirm_delete" placeholder="Digite APAGAR para confirmar">';
+    echo '<button type="submit" class="danger-button">Apagar todos os dados</button></form>';
+    echo '</div></section>';
+
     auto_runner_script();
 }
 
 function jobs_table(array $jobs, bool $actions): void
 {
-    echo '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Nicho</th><th>Status</th><th>Paginas</th><th>Videos</th><th>E-mails</th><th></th></tr></thead><tbody>';
+    echo '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Nicho</th><th>Status</th><th>Progresso</th><th>Videos</th><th>E-mails</th><th></th></tr></thead><tbody>';
     foreach ($jobs as $job) {
         echo '<tr>';
         echo '<td>#' . h((string) $job['id']) . '</td>';
         $maxSubscribers = empty($job['max_subscribers']) ? 'sem teto' : 'ate ' . format_int((int) $job['max_subscribers']) . ' inscritos';
         $maxViews = empty($job['max_views']) ? 'sem teto de views' : 'ate ' . format_int((int) $job['max_views']) . ' views';
-        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) $job['keywords']) . '</span><span>' . h(video_type_label((string) ($job['video_type'] ?? 'both'))) . ' - ' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
+        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) $job['keywords']) . '</span><span>' . h(video_type_label((string) ($job['video_type'] ?? 'both'))) . ' - ' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span>';
+        $precision = job_precision_label($job);
+        if ($precision !== '') {
+            echo '<span>' . h($precision) . '</span>';
+        }
+        echo '</td>';
         echo '<td>' . status_badge((string) $job['status']);
         if (!empty($job['error_message'])) {
             echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
         }
         echo '</td>';
-        echo '<td>' . h(format_int((int) $job['pages_processed'])) . '/' . h(format_int((int) $job['max_pages'])) . '</td>';
+        echo '<td class="progress-cell">' . progress_bar_html(job_progress_percent($job), 'mini') . '<span>' . h(format_int((int) $job['pages_processed'])) . '/' . h(format_int((int) $job['max_pages'])) . ' paginas</span></td>';
         echo '<td>' . h(format_int((int) $job['videos_checked'])) . '</td>';
         echo '<td>' . h(format_int((int) $job['emails_found'])) . '</td>';
         echo '<td>';
@@ -496,16 +563,51 @@ function auto_runner_script(): void
   }
 
   var status = panel.querySelector('.auto-runner-status');
+  var fill = panel.querySelector('.progress-fill');
+  var percent = panel.querySelector('.progress-percent');
+  var detail = panel.querySelector('.progress-detail');
+  var badge = panel.querySelector('.auto-runner-badge');
   var csrf = panel.getAttribute('data-csrf') || '';
-  var totalSteps = 0;
-  var totalVideos = 0;
-  var totalEmails = 0;
+  var batchId = panel.getAttribute('data-batch-id') || '';
   var stopped = false;
 
   function setStatus(text) {
     if (status) {
       status.textContent = text;
     }
+  }
+
+  function setProgress(progress) {
+    if (!progress) {
+      return;
+    }
+
+    var value = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    if (fill) {
+      fill.style.width = value + '%';
+      fill.parentNode.setAttribute('aria-valuenow', String(value));
+    }
+    if (percent) {
+      percent.textContent = value + '%';
+    }
+    if (detail) {
+      detail.textContent = Number(progress.processed_pages || 0) + '/' + Number(progress.total_pages || 0) +
+        ' paginas, ' + Number(progress.videos_checked || 0) + ' videos, ' + Number(progress.emails_found || 0) + ' e-mails';
+    }
+    if (badge) {
+      badge.innerHTML = '<span class="status ' + String(progress.status || 'running') + '">' +
+        statusLabel(String(progress.status || 'running')) + '</span>';
+    }
+  }
+
+  function statusLabel(statusName) {
+    var labels = {
+      idle: 'ocioso',
+      running: 'rodando',
+      completed: 'concluido',
+      failed: 'falhou'
+    };
+    return labels[statusName] || statusName;
   }
 
   function runBatch() {
@@ -516,6 +618,9 @@ function auto_runner_script(): void
     var body = new URLSearchParams();
     body.set('action', 'run_auto_batch');
     body.set('csrf_token', csrf);
+    if (batchId) {
+      body.set('batch_id', batchId);
+    }
 
     fetch('?page=jobs', {
       method: 'POST',
@@ -528,27 +633,29 @@ function auto_runner_script(): void
     })
       .then(function (response) {
         return response.json().then(function (data) {
-          if (!response.ok || !data.ok) {
+          if (!response.ok) {
             throw new Error(data.message || 'Falha ao processar busca.');
           }
           return data;
         });
       })
       .then(function (data) {
-        totalSteps += Number(data.steps || 0);
-        totalVideos += Number(data.videos_checked || 0);
-        totalEmails += Number(data.emails_found || 0);
+        setProgress(data.progress);
+
+        if (!data.ok) {
+          throw new Error(data.message || 'Falha ao processar busca.');
+        }
 
         if (data.keep_running) {
-          setStatus('Rodando automaticamente... paginas: ' + totalSteps + ', videos: ' + totalVideos + ', e-mails: ' + totalEmails + '.');
+          setStatus('Processando lote automaticamente...');
           window.setTimeout(runBatch, 900);
           return;
         }
 
         stopped = true;
-        setStatus('Busca finalizada. Paginas processadas: ' + totalSteps + ', videos: ' + totalVideos + ', e-mails: ' + totalEmails + '.');
+        setStatus('Processamento finalizado.');
         window.setTimeout(function () {
-          window.location.href = '?page=jobs';
+          window.location.href = batchId ? '?page=jobs&batch_id=' + encodeURIComponent(batchId) : '?page=jobs';
         }, 1200);
       })
       .catch(function (error) {
@@ -917,6 +1024,7 @@ function status_badge(string $status): string
     $class = preg_replace('/[^a-z0-9_-]/', '', $status) ?: 'unknown';
     $labels = [
         'pending' => 'pendente',
+        'idle' => 'ocioso',
         'running' => 'rodando',
         'completed' => 'concluido',
         'failed' => 'falhou',
@@ -973,6 +1081,94 @@ function video_type_label(string $type): string
         'short' => 'somente Shorts',
         default => 'videos e Shorts',
     };
+}
+
+function progress_bar_html(int $percent, string $class = ''): string
+{
+    $percent = max(0, min(100, $percent));
+    $class = trim('progress-bar ' . $class);
+
+    return '<div class="' . h($class) . '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' . h((string) $percent) . '"><span class="progress-fill" style="width: ' . h((string) $percent) . '%"></span></div>';
+}
+
+function job_progress_percent(array $job): int
+{
+    $maxPages = max(1, (int) ($job['max_pages'] ?? 1));
+    $processed = min($maxPages, max(0, (int) ($job['pages_processed'] ?? 0)));
+
+    return (int) round(($processed / $maxPages) * 100);
+}
+
+function job_precision_label(array $job): string
+{
+    $parts = [];
+    $include = terms_preview((string) ($job['include_terms'] ?? ''));
+    $exclude = terms_preview((string) ($job['exclude_terms'] ?? ''));
+    if ($include !== '') {
+        $parts[] = 'termos: ' . $include;
+    }
+    if ($exclude !== '') {
+        $parts[] = 'bloqueados: ' . $exclude;
+    }
+    if ($parts === []) {
+        return '';
+    }
+
+    return truncate_text(implode(' - ', $parts), 140);
+}
+
+function terms_preview(string $terms): string
+{
+    $terms = trim(preg_replace('/\R+/', ', ', $terms) ?? '');
+    return trim(preg_replace('/\s+/', ' ', $terms) ?? '');
+}
+
+function progress_text(array $progress, bool $autoRun): string
+{
+    if ((int) ($progress['total_jobs'] ?? 0) === 0) {
+        return 'Nenhuma busca pendente no momento.';
+    }
+
+    if ((string) ($progress['status'] ?? '') === 'failed') {
+        return 'Processamento interrompido. Veja o erro no historico abaixo.';
+    }
+
+    if ($autoRun) {
+        return 'Processando lote automaticamente...';
+    }
+
+    return 'Processamento finalizado.';
+}
+
+function progress_detail(array $progress): string
+{
+    return format_int((int) ($progress['processed_pages'] ?? 0)) . '/' .
+        format_int((int) ($progress['total_pages'] ?? 0)) . ' paginas, ' .
+        format_int((int) ($progress['videos_checked'] ?? 0)) . ' videos, ' .
+        format_int((int) ($progress['emails_found'] ?? 0)) . ' e-mails';
+}
+
+function clean_batch_id(string $batchId): string
+{
+    return preg_match('/^[a-f0-9]{16}$/', $batchId) ? $batchId : '';
+}
+
+function friendly_exception_message(Throwable $exception): string
+{
+    $message = trim($exception->getMessage());
+    $lower = strtolower($message);
+
+    if (str_contains($lower, 'quota')) {
+        return 'A quota da API do YouTube acabou ou foi limitada. Aguarde a renovacao da quota ou use outra chave.';
+    }
+    if (str_contains($lower, 'api key') || str_contains($lower, 'keyinvalid') || str_contains($lower, 'forbidden')) {
+        return 'A chave da API do YouTube foi recusada. Confira se a YouTube Data API v3 esta ativa e se a chave esta correta.';
+    }
+    if (str_contains($lower, 'falha http')) {
+        return 'Falha ao consultar o YouTube. Confira a chave da API, quota e conexao da hospedagem.';
+    }
+
+    return $message !== '' ? $message : 'Falha inesperada ao processar a busca.';
 }
 
 /**
