@@ -394,6 +394,25 @@ final class LeadRepository
         ]);
     }
 
+    public function deleteLead(int $id): bool
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM leads WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+    public function deleteAllLeads(): int
+    {
+        $total = (int) $this->pdo->query('SELECT COUNT(*) FROM leads')->fetchColumn();
+        if ($total === 0) {
+            return 0;
+        }
+
+        $this->pdo->exec('DELETE FROM leads');
+        return $total;
+    }
+
     public function exportLeadsCsv(array $filters = []): never
     {
         [$where, $params] = $this->leadWhere($filters);

@@ -8,7 +8,7 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 - Filtros de views minimas e maximas, pais, idioma, ordenacao e data minima.
 - Extracao de e-mails presentes em descricoes publicas dos videos.
 - Banco com categorias, canais, videos, leads e origem do achado.
-- Controle de leads com status, notas, fontes por video, bloqueio manual e exportacao CSV.
+- Controle de leads com status, notas, fontes por video, exclusao individual, limpeza geral, bloqueio manual e exportacao CSV.
 - Dashboard operacional com leads ativos, qualificados, ignorados, fila, envios e falhas.
 - Campanhas com variaveis como `{{creator_name}}`, `{{niche}}`, `{{product_name}}`, `{{commission}}` e `{{unsubscribe_url}}`.
 - Fila de envio SMTP com limite por execucao.

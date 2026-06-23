@@ -143,6 +143,18 @@ function handle_post_actions(
         redirect('?page=leads');
     }
 
+    if ($page === 'leads' && $action === 'delete_lead') {
+        $deleted = $leadRepo->deleteLead(post_int('lead_id'));
+        flash($deleted ? 'Lead excluido.' : 'Lead nao encontrado.');
+        redirect(local_return_path(post_string('return_to', '?page=leads'), '?page=leads'));
+    }
+
+    if ($page === 'leads' && $action === 'clear_leads') {
+        $deleted = $leadRepo->deleteAllLeads();
+        flash($deleted . ' lead(s) excluido(s).');
+        redirect('?page=leads');
+    }
+
     if ($page === 'lead' && $action === 'update_lead') {
         $leadId = post_int('lead_id');
         $leadRepo->updateLead($leadId, post_string('status', 'discovered'), post_string('notes'));
@@ -157,6 +169,12 @@ function handle_post_actions(
         $leadRepo->updateLead($leadId, 'ignored', post_string('notes'));
         flash('Lead bloqueado e marcado como ignorado.');
         redirect('?page=lead&id=' . $leadId);
+    }
+
+    if ($page === 'lead' && $action === 'delete_lead') {
+        $deleted = $leadRepo->deleteLead(post_int('lead_id'));
+        flash($deleted ? 'Lead excluido.' : 'Lead nao encontrado.');
+        redirect('?page=leads');
     }
 
     if ($page === 'campaigns' && $action === 'create_campaign') {
@@ -431,7 +449,10 @@ function leads_page(LeadRepository $repo, array $categories): void
     $leads = $repo->leads($filters);
     $stats = $repo->stats();
 
-    echo '<section class="topbar"><div><p class="eyebrow">Controle de contatos</p><h1>Leads encontrados</h1></div><a class="button" href="' . h(current_path(['export' => 'csv'])) . '">Exportar CSV</a></section>';
+    echo '<section class="topbar"><div><p class="eyebrow">Controle de contatos</p><h1>Leads encontrados</h1></div><div class="top-actions">';
+    echo '<a class="button" href="' . h(current_path(['export' => 'csv'])) . '">Exportar CSV</a>';
+    echo '<form method="post" class="inline-form" onsubmit="return confirm(\'Excluir todos os leads?\')">' . csrf_field() . '<button type="submit" name="action" value="clear_leads" class="danger-button">Limpar leads</button></form>';
+    echo '</div></section>';
     echo '<section class="metrics compact">';
     metric('Ativos', format_int((int) $stats['active_leads']));
     metric('Qualificados', format_int((int) $stats['qualified_leads']));
@@ -486,6 +507,7 @@ function leads_table(array $leads, bool $actions): void
         if ($actions) {
             echo '<a class="button secondary-link" href="?page=lead&id=' . h((string) $lead['id']) . '">Detalhes</a>';
             echo '<form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="suppress"><input type="hidden" name="email" value="' . h((string) $lead['email']) . '"><button class="secondary" type="submit">Bloquear</button></form>';
+            echo '<form method="post" class="inline-form" onsubmit="return confirm(\'Excluir este lead?\')">' . csrf_field() . '<input type="hidden" name="action" value="delete_lead"><input type="hidden" name="lead_id" value="' . h((string) $lead['id']) . '"><input type="hidden" name="return_to" value="' . h(current_path()) . '"><button class="icon-delete" type="submit" title="Excluir lead">x</button></form>';
         }
         echo '</td>';
         echo '</tr>';
@@ -546,6 +568,10 @@ function lead_detail_page(LeadRepository $repo): void
     echo '<form method="post" class="danger-form">';
     echo csrf_field() . '<input type="hidden" name="action" value="suppress"><input type="hidden" name="lead_id" value="' . h((string) $lead['id']) . '"><input type="hidden" name="email" value="' . h((string) $lead['email']) . '"><input type="hidden" name="notes" value="' . h((string) ($lead['notes'] ?? '')) . '">';
     echo '<button type="submit" class="ghost-danger">Bloquear e ignorar</button>';
+    echo '</form>';
+    echo '<form method="post" class="danger-form" onsubmit="return confirm(\'Excluir este lead?\')">';
+    echo csrf_field() . '<input type="hidden" name="action" value="delete_lead"><input type="hidden" name="lead_id" value="' . h((string) $lead['id']) . '">';
+    echo '<button type="submit" class="ghost-danger">Excluir lead</button>';
     echo '</form>';
     echo '</div>';
     echo '</section>';
@@ -808,6 +834,16 @@ function truncate_text(?string $value, int $limit = 120): string
     }
 
     return strlen($value) > $limit ? substr($value, 0, max(0, $limit - 3)) . '...' : $value;
+}
+
+function local_return_path(string $path, string $fallback): string
+{
+    $path = trim($path);
+    if ($path === '' || !str_starts_with($path, '?')) {
+        return $fallback;
+    }
+
+    return str_contains($path, "\n") || str_contains($path, "\r") ? $fallback : $path;
 }
 
 function default_campaign_body(): string

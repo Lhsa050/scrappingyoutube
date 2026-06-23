@@ -118,6 +118,14 @@ nav a:hover,
   gap: 18px;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 h1,
 h2 {
   margin: 0;
@@ -316,6 +324,33 @@ button.secondary:hover,
 .secondary-link:hover {
   background: #d7eadf;
   color: var(--accent-strong);
+}
+
+.danger-button {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.danger-button:hover {
+  background: #7f3030;
+  color: #ffffff;
+}
+
+.icon-delete {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 1px solid #e8c6c6;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.icon-delete:hover {
+  background: #efd3d3;
+  color: var(--danger);
 }
 
 .ghost-danger {
