@@ -46,9 +46,9 @@ final class LeadRepository
         $now = Database::now();
         $stmt = $this->pdo->prepare(
             'INSERT INTO scrape_jobs
-             (niche, keywords, category_id, min_views, max_views, max_subscribers, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
+             (niche, keywords, category_id, min_views, max_views, max_subscribers, video_type, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
              VALUES
-             (:niche, :keywords, :category_id, :min_views, :max_views, :max_subscribers, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
+             (:niche, :keywords, :category_id, :min_views, :max_views, :max_subscribers, :video_type, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
         );
         $stmt->execute([
             'niche' => $data['niche'],
@@ -57,6 +57,7 @@ final class LeadRepository
             'min_views' => $data['min_views'],
             'max_views' => $data['max_views'],
             'max_subscribers' => $data['max_subscribers'],
+            'video_type' => $data['video_type'] ?? 'both',
             'max_pages' => $data['max_pages'],
             'region_code' => $data['region_code'],
             'relevance_language' => $data['relevance_language'],
@@ -192,6 +193,8 @@ final class LeadRepository
             'title' => (string) ($snippet['title'] ?? 'Video sem titulo'),
             'description' => (string) ($snippet['description'] ?? ''),
             'view_count' => (int) ($statistics['viewCount'] ?? 0),
+            'duration_seconds' => $video['_duration_seconds'] ?? null,
+            'video_type' => (string) ($video['_video_type'] ?? 'video'),
             'published_at' => $publishedAt,
             'youtube_url' => 'https://www.youtube.com/watch?v=' . rawurlencode($videoId),
             'updated_at' => $now,
@@ -205,6 +208,7 @@ final class LeadRepository
             $stmt = $this->pdo->prepare(
                 'UPDATE videos
                  SET channel_id = :channel_id, title = :title, description = :description, view_count = :view_count,
+                     duration_seconds = :duration_seconds, video_type = :video_type,
                      published_at = :published_at, youtube_url = :youtube_url, updated_at = :updated_at
                  WHERE youtube_video_id = :youtube_video_id'
             );
@@ -215,9 +219,9 @@ final class LeadRepository
         $data['created_at'] = $now;
         $stmt = $this->pdo->prepare(
             'INSERT INTO videos
-             (youtube_video_id, channel_id, title, description, view_count, published_at, youtube_url, created_at, updated_at)
+             (youtube_video_id, channel_id, title, description, view_count, duration_seconds, video_type, published_at, youtube_url, created_at, updated_at)
              VALUES
-             (:youtube_video_id, :channel_id, :title, :description, :view_count, :published_at, :youtube_url, :created_at, :updated_at)'
+             (:youtube_video_id, :channel_id, :title, :description, :view_count, :duration_seconds, :video_type, :published_at, :youtube_url, :created_at, :updated_at)'
         );
         $stmt->execute($data);
 

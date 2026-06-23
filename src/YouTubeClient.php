@@ -46,7 +46,7 @@ final class YouTubeClient
         }
 
         $response = $this->request('videos', [
-            'part' => 'snippet,statistics',
+            'part' => 'snippet,statistics,contentDetails',
             'id' => implode(',', array_slice($ids, 0, 50)),
             'key' => $this->apiKey,
         ]);

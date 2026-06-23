@@ -125,6 +125,10 @@ function handle_post_actions(
 
         $categoryId = $leadRepo->categoryId(post_string('category', 'Geral'));
         $publishedAfter = post_string('published_after');
+        $videoType = post_string('video_type', 'both');
+        if (!in_array($videoType, ['both', 'video', 'short'], true)) {
+            $videoType = 'both';
+        }
         $created = 0;
         foreach ($keywords as $keyword) {
             $leadRepo->createScrapeJob([
@@ -134,6 +138,7 @@ function handle_post_actions(
                 'min_views' => max(0, post_int('min_views', 0)),
                 'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
                 'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
+                'video_type' => $videoType,
                 'max_pages' => min(20, max(1, post_int('max_pages', 1))),
                 'region_code' => strtoupper(post_string('region_code', 'BR')),
                 'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
@@ -426,6 +431,7 @@ function jobs_page(LeadRepository $repo, array $categories): void
     input('Nicho', 'niche', 'Dicas de financas');
     textarea_field('Palavras-chave, uma por linha', 'keywords', "financas pessoais\ninvestimentos para iniciantes\nrenda extra", 5);
     input('Categoria', 'category', 'Financas');
+    select_field('Tipo de conteudo', 'video_type', ['both' => 'Videos e Shorts', 'video' => 'Somente videos', 'short' => 'Somente Shorts'], 'both');
     input('Views minimas', 'min_views', '10000', 'number');
     input('Views maximas', 'max_views', '100000', 'number');
     input('Inscritos maximos', 'max_subscribers', '30000', 'number');
@@ -458,7 +464,7 @@ function jobs_table(array $jobs, bool $actions): void
         echo '<td>#' . h((string) $job['id']) . '</td>';
         $maxSubscribers = empty($job['max_subscribers']) ? 'sem teto' : 'ate ' . format_int((int) $job['max_subscribers']) . ' inscritos';
         $maxViews = empty($job['max_views']) ? 'sem teto de views' : 'ate ' . format_int((int) $job['max_views']) . ' views';
-        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) $job['keywords']) . '</span><span>' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
+        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) $job['keywords']) . '</span><span>' . h(video_type_label((string) ($job['video_type'] ?? 'both'))) . ' - ' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
         echo '<td>' . status_badge((string) $job['status']);
         if (!empty($job['error_message'])) {
             echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
@@ -958,6 +964,15 @@ function subscriber_label(array $row): string
     }
 
     return format_int((int) $row['subscriber_count']) . ' inscritos';
+}
+
+function video_type_label(string $type): string
+{
+    return match ($type) {
+        'video' => 'somente videos',
+        'short' => 'somente Shorts',
+        default => 'videos e Shorts',
+    };
 }
 
 /**

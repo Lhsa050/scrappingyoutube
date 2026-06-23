@@ -75,6 +75,13 @@ final class ScrapeService
 
             foreach ($videos as $video) {
                 $checked++;
+                $durationSeconds = $this->durationSeconds((string) ($video['contentDetails']['duration'] ?? ''));
+                $videoType = $durationSeconds > 0 && $durationSeconds <= 60 ? 'short' : 'video';
+                $wantedType = (string) ($job['video_type'] ?? 'both');
+                if (in_array($wantedType, ['video', 'short'], true) && $videoType !== $wantedType) {
+                    continue;
+                }
+
                 $views = (int) ($video['statistics']['viewCount'] ?? 0);
                 $maxViews = $job['max_views'] === null ? null : (int) $job['max_views'];
                 if ($views < (int) $job['min_views']) {
@@ -98,6 +105,8 @@ final class ScrapeService
                     continue;
                 }
 
+                $video['_duration_seconds'] = $durationSeconds > 0 ? $durationSeconds : null;
+                $video['_video_type'] = $videoType;
                 $channelId = $this->leads->upsertChannel($snippet, $channel);
                 $videoId = $this->leads->upsertVideo($video, $channelId);
                 $sourceUrl = 'https://www.youtube.com/watch?v=' . rawurlencode((string) $video['id']);
@@ -192,5 +201,23 @@ final class ScrapeService
         }
 
         return (int) $statistics['subscriberCount'] <= $maxSubscribers;
+    }
+
+    private function durationSeconds(string $duration): int
+    {
+        if ($duration === '') {
+            return 0;
+        }
+
+        try {
+            $interval = new \DateInterval($duration);
+        } catch (\Throwable) {
+            return 0;
+        }
+
+        return ($interval->d * 86400)
+            + ($interval->h * 3600)
+            + ($interval->i * 60)
+            + $interval->s;
     }
 }

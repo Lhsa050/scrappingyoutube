@@ -51,7 +51,10 @@ final class Database
 
         self::ensureColumn('channels', 'subscriber_count', Config::dbConnection() === 'mysql' ? 'BIGINT UNSIGNED NULL' : 'INTEGER NULL');
         self::ensureColumn('channels', 'subscribers_hidden', Config::dbConnection() === 'mysql' ? 'TINYINT(1) NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('videos', 'duration_seconds', Config::dbConnection() === 'mysql' ? 'INT UNSIGNED NULL' : 'INTEGER NULL');
+        self::ensureColumn('videos', 'video_type', Config::dbConnection() === 'mysql' ? 'VARCHAR(20) NOT NULL DEFAULT \'video\'' : 'TEXT NOT NULL DEFAULT \'video\'');
         self::ensureColumn('scrape_jobs', 'max_subscribers', Config::dbConnection() === 'mysql' ? 'BIGINT UNSIGNED NULL' : 'INTEGER NULL');
+        self::ensureColumn('scrape_jobs', 'video_type', Config::dbConnection() === 'mysql' ? 'VARCHAR(20) NOT NULL DEFAULT \'both\'' : 'TEXT NOT NULL DEFAULT \'both\'');
 
         self::$migrated = true;
     }
