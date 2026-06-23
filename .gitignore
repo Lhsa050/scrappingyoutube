@@ -1,0 +1,10 @@
+.env
+build/
+storage/*.sqlite
+storage/*.sqlite-shm
+storage/*.sqlite-wal
+storage/installed.lock
+storage/backups/
+storage/updates/
+storage/logs/*
+!storage/logs/.gitkeep

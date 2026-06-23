@@ -278,11 +278,20 @@ final class LeadRepository
      */
     public function stats(): array
     {
+        $lastSevenDays = (new DateTimeImmutable('-7 days'))->format('Y-m-d H:i:s');
+
         return [
             'leads' => (int) $this->pdo->query('SELECT COUNT(*) FROM leads')->fetchColumn(),
             'active_leads' => (int) $this->pdo->query('SELECT COUNT(*) FROM leads WHERE unsubscribed_at IS NULL')->fetchColumn(),
+            'qualified_leads' => (int) $this->pdo->query('SELECT COUNT(*) FROM leads WHERE status = \'qualified\' AND unsubscribed_at IS NULL')->fetchColumn(),
+            'ignored_leads' => (int) $this->pdo->query('SELECT COUNT(*) FROM leads WHERE status = \'ignored\'')->fetchColumn(),
+            'new_leads_7d' => $this->countSince('leads', 'first_seen_at', $lastSevenDays),
             'videos' => (int) $this->pdo->query('SELECT COUNT(*) FROM videos')->fetchColumn(),
             'queued' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue WHERE status = \'queued\'')->fetchColumn(),
+            'sent' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue WHERE status = \'sent\'')->fetchColumn(),
+            'failed' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue WHERE status = \'failed\'')->fetchColumn(),
+            'suppressed' => (int) $this->pdo->query('SELECT COUNT(*) FROM suppression_list')->fetchColumn(),
+            'running_jobs' => (int) $this->pdo->query('SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')')->fetchColumn(),
         ];
     }
 
@@ -293,6 +302,9 @@ final class LeadRepository
     {
         [$where, $params] = $this->leadWhere($filters);
         $sql = 'SELECT l.*, c.name AS category_name, ch.title AS channel_title,
+                       (SELECT COUNT(*)
+                        FROM lead_sources ls
+                        WHERE ls.lead_id = l.id) AS source_count,
                        (SELECT v.title
                         FROM lead_sources ls
                         JOIN videos v ON v.id = ls.video_id
@@ -303,7 +315,15 @@ final class LeadRepository
                         FROM lead_sources ls
                         WHERE ls.lead_id = l.id
                         ORDER BY ls.id DESC
-                        LIMIT 1) AS latest_source_url
+                        LIMIT 1) AS latest_source_url,
+                       (SELECT ls.found_context
+                        FROM lead_sources ls
+                        WHERE ls.lead_id = l.id
+                        ORDER BY ls.id DESC
+                        LIMIT 1) AS latest_context,
+                       (SELECT COUNT(*)
+                        FROM suppression_list s
+                        WHERE s.email = l.email) AS suppressed
                 FROM leads l
                 JOIN categories c ON c.id = l.category_id
                 JOIN channels ch ON ch.id = l.channel_id
@@ -319,11 +339,68 @@ final class LeadRepository
         return $stmt->fetchAll();
     }
 
+    public function findLead(int $id): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT l.*, c.name AS category_name, ch.title AS channel_title, ch.youtube_channel_id, ch.thumbnail_url,
+                    (SELECT COUNT(*) FROM lead_sources ls WHERE ls.lead_id = l.id) AS source_count,
+                    (SELECT COUNT(*) FROM email_queue q WHERE q.lead_id = l.id) AS queue_total,
+                    (SELECT COUNT(*) FROM email_queue q WHERE q.lead_id = l.id AND q.status = \'sent\') AS sent_total,
+                    (SELECT COUNT(*) FROM email_queue q WHERE q.lead_id = l.id AND q.status = \'failed\') AS failed_total,
+                    (SELECT COUNT(*) FROM suppression_list s WHERE s.email = l.email) AS suppressed
+             FROM leads l
+             JOIN categories c ON c.id = l.category_id
+             JOIN channels ch ON ch.id = l.channel_id
+             WHERE l.id = :id
+             LIMIT 1'
+        );
+        $stmt->execute(['id' => $id]);
+        $lead = $stmt->fetch();
+        return $lead ?: null;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function leadSources(int $leadId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT ls.*, v.title AS video_title, v.view_count, v.published_at, v.youtube_url, ch.title AS channel_title
+             FROM lead_sources ls
+             JOIN videos v ON v.id = ls.video_id
+             JOIN channels ch ON ch.id = v.channel_id
+             WHERE ls.lead_id = :lead_id
+             ORDER BY ls.id DESC'
+        );
+        $stmt->execute(['lead_id' => $leadId]);
+        return $stmt->fetchAll();
+    }
+
+    public function updateLead(int $id, string $status, string $notes): void
+    {
+        $allowed = ['discovered', 'qualified', 'ignored'];
+        if (!in_array($status, $allowed, true)) {
+            throw new RuntimeException('Status de lead invalido.');
+        }
+
+        $stmt = $this->pdo->prepare(
+            'UPDATE leads SET status = :status, notes = :notes, updated_at = :updated_at WHERE id = :id'
+        );
+        $stmt->execute([
+            'status' => $status,
+            'notes' => trim($notes),
+            'updated_at' => Database::now(),
+            'id' => $id,
+        ]);
+    }
+
     public function exportLeadsCsv(array $filters = []): never
     {
         [$where, $params] = $this->leadWhere($filters);
         $stmt = $this->pdo->prepare(
-            'SELECT l.email, c.name AS category, ch.title AS channel, l.status, l.first_seen_at, l.last_seen_at, l.unsubscribed_at
+            'SELECT l.email, c.name AS category, ch.title AS channel, l.status, l.first_seen_at, l.last_seen_at, l.last_contacted_at, l.unsubscribed_at,
+                    (SELECT COUNT(*) FROM lead_sources ls WHERE ls.lead_id = l.id) AS source_count,
+                    (SELECT ls.source_url FROM lead_sources ls WHERE ls.lead_id = l.id ORDER BY ls.id DESC LIMIT 1) AS latest_source_url
              FROM leads l
              JOIN categories c ON c.id = l.category_id
              JOIN channels ch ON ch.id = l.channel_id
@@ -336,7 +413,7 @@ final class LeadRepository
         header('Content-Disposition: attachment; filename="leads-youtube.csv"');
         $out = fopen('php://output', 'wb');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['email', 'categoria', 'canal', 'status', 'primeiro_achado', 'ultimo_achado', 'descadastro']);
+        fputcsv($out, ['email', 'categoria', 'canal', 'status', 'primeiro_achado', 'ultimo_achado', 'ultimo_contato', 'descadastro', 'fontes', 'ultima_url']);
         while ($row = $stmt->fetch()) {
             fputcsv($out, $row);
         }
@@ -410,10 +487,25 @@ final class LeadRepository
             $params['q'] = '%' . $filters['q'] . '%';
         }
 
+        if (!empty($filters['status'])) {
+            $allowed = ['discovered', 'qualified', 'ignored', 'unsubscribed'];
+            if (in_array((string) $filters['status'], $allowed, true)) {
+                $where[] = 'l.status = :status';
+                $params['status'] = (string) $filters['status'];
+            }
+        }
+
         if (($filters['active'] ?? '') === '1') {
             $where[] = 'l.unsubscribed_at IS NULL';
         }
 
         return [$where ? 'WHERE ' . implode(' AND ', $where) : '', $params];
+    }
+
+    private function countSince(string $table, string $column, string $since): int
+    {
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM {$table} WHERE {$column} >= :since");
+        $stmt->execute(['since' => $since]);
+        return (int) $stmt->fetchColumn();
     }
 }

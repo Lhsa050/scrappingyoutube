@@ -23,13 +23,78 @@ final class UpdaterService
             return '0.0.0';
         }
 
-        return trim((string) file_get_contents($versionFile)) ?: '0.0.0';
+        $version = (string) file_get_contents($versionFile);
+        $version = preg_replace('/^\xEF\xBB\xBF/', '', $version) ?? $version;
+
+        return trim($version) ?: '0.0.0';
     }
 
     /**
      * @return array<string, mixed>
      */
     public function check(): array
+    {
+        return $this->checkGitHub();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function checkGitHub(): array
+    {
+        $repo = trim((string) $this->settings->get('github_repo', 'Lhsa050/scrappingyoutube'));
+        $branch = trim((string) $this->settings->get('github_branch', 'main'));
+        $token = trim((string) $this->settings->get('github_token', ''));
+
+        if (!preg_match('/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/', $repo)) {
+            throw new RuntimeException('Repositorio GitHub invalido. Use o formato usuario/repositorio.');
+        }
+
+        $repoInfo = $this->githubJson('https://api.github.com/repos/' . $repo, $token);
+        if ($branch === '') {
+            $branch = (string) ($repoInfo['default_branch'] ?? 'main');
+        }
+
+        $versionInfo = $this->githubJson(
+            'https://api.github.com/repos/' . $repo . '/contents/VERSION?ref=' . rawurlencode($branch),
+            $token
+        );
+
+        $encoded = (string) ($versionInfo['content'] ?? '');
+        $latestVersion = (string) base64_decode(str_replace(["\n", "\r"], '', $encoded), true);
+        $latestVersion = preg_replace('/^\xEF\xBB\xBF/', '', $latestVersion) ?? $latestVersion;
+        $latestVersion = trim($latestVersion);
+        if ($latestVersion === '') {
+            throw new RuntimeException('Nao foi possivel ler o arquivo VERSION no repositorio GitHub.');
+        }
+
+        $currentVersion = $this->currentVersion();
+        $available = version_compare($latestVersion, $currentVersion, '>');
+        $packageUrl = 'https://github.com/' . $repo . '/archive/refs/heads/' . rawurlencode($branch) . '.zip';
+
+        return [
+            'current_version' => $currentVersion,
+            'latest_version' => $latestVersion,
+            'available' => $available,
+            'manifest' => [
+                'version' => $latestVersion,
+                'released_at' => (string) ($repoInfo['pushed_at'] ?? ''),
+                'package_url' => $packageUrl,
+                'notes' => [
+                    'Codigo fonte mais recente no GitHub: ' . $repo . ' @ ' . $branch,
+                ],
+                'source' => 'github',
+                'repo' => $repo,
+                'branch' => $branch,
+            ],
+            'manifest_url' => 'https://github.com/' . $repo,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function checkManifest(): array
     {
         $manifestUrl = trim((string) $this->settings->get('update_manifest_url', ''));
         if ($manifestUrl === '') {
@@ -52,6 +117,36 @@ final class UpdaterService
             'manifest' => $manifest,
             'manifest_url' => $manifestUrl,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function githubJson(string $url, string $token): array
+    {
+        $headers = [
+            'Accept: application/vnd.github+json',
+            'X-GitHub-Api-Version: 2022-11-28',
+        ];
+        if ($token !== '') {
+            $headers[] = 'Authorization: Bearer ' . $token;
+        }
+
+        $body = $this->httpGet($url, $headers);
+        $json = json_decode($body, true);
+        if (!is_array($json)) {
+            throw new RuntimeException('GitHub respondeu um JSON invalido.');
+        }
+
+        if (isset($json['message']) && !isset($json['content']) && !isset($json['default_branch'])) {
+            $message = (string) $json['message'];
+            if (str_contains(strtolower($message), 'not found')) {
+                throw new RuntimeException('Repositorio GitHub nao encontrado ou privado. Confirme o nome do repo ou configure um token.');
+            }
+            throw new RuntimeException('Erro do GitHub: ' . $message);
+        }
+
+        return $json;
     }
 
     /**
@@ -134,7 +229,7 @@ final class UpdaterService
         }
     }
 
-    private function httpGet(string $url): string
+    private function httpGet(string $url, array $headers = []): string
     {
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             throw new RuntimeException('URL de atualizacao invalida.');
@@ -149,6 +244,9 @@ final class UpdaterService
                 CURLOPT_CONNECTTIMEOUT => 15,
                 CURLOPT_USERAGENT => 'CreatorOutreachUpdater/' . $this->currentVersion(),
             ]);
+            if ($headers !== []) {
+                curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+            }
             $body = curl_exec($curl);
             $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
             $error = curl_error($curl);
@@ -164,7 +262,9 @@ final class UpdaterService
         $context = stream_context_create([
             'http' => [
                 'timeout' => 60,
-                'header' => "User-Agent: CreatorOutreachUpdater/" . $this->currentVersion() . "\r\n",
+                'header' => "User-Agent: CreatorOutreachUpdater/" . $this->currentVersion() . "\r\n"
+                    . implode("\r\n", $headers)
+                    . ($headers === [] ? '' : "\r\n"),
             ],
         ]);
         $body = file_get_contents($url, false, $context);

@@ -75,6 +75,9 @@ final class SettingsRepository
             'mail_reply_to' => (string) Config::get('MAIL_REPLY_TO', ''),
             'emails_per_run' => (string) Config::int('EMAILS_PER_RUN', 20),
             'update_manifest_url' => (string) Config::get('UPDATE_MANIFEST_URL', ''),
+            'github_repo' => (string) Config::get('GITHUB_REPO', 'Lhsa050/scrappingyoutube'),
+            'github_branch' => (string) Config::get('GITHUB_BRANCH', 'main'),
+            'github_token' => (string) Config::get('GITHUB_TOKEN', ''),
         ];
     }
 

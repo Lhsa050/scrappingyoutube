@@ -59,6 +59,7 @@ if ($page === 'leads' && ($_GET['export'] ?? '') === 'csv') {
         'category_id' => (int) ($_GET['category_id'] ?? 0),
         'q' => (string) ($_GET['q'] ?? ''),
         'active' => (string) ($_GET['active'] ?? ''),
+        'status' => (string) ($_GET['status'] ?? ''),
     ]);
 }
 
@@ -66,7 +67,7 @@ try {
     handle_post_actions($page, $leadRepo, $campaignRepo, $settingsRepo);
 } catch (Throwable $exception) {
     flash($exception->getMessage(), 'error');
-    redirect('?page=' . rawurlencode($page));
+    redirect(current_path(['page' => $page]));
 }
 
 $categories = $leadRepo->categories();
@@ -76,6 +77,8 @@ if ($page === 'jobs') {
     jobs_page($leadRepo, $categories);
 } elseif ($page === 'leads') {
     leads_page($leadRepo, $categories);
+} elseif ($page === 'lead') {
+    lead_detail_page($leadRepo);
 } elseif ($page === 'campaigns') {
     campaigns_page($campaignRepo, $categories);
 } elseif ($page === 'settings') {
@@ -138,6 +141,22 @@ function handle_post_actions(
         $leadRepo->suppress(post_string('email'), 'Bloqueio manual');
         flash('E-mail adicionado a lista de bloqueio.');
         redirect('?page=leads');
+    }
+
+    if ($page === 'lead' && $action === 'update_lead') {
+        $leadId = post_int('lead_id');
+        $leadRepo->updateLead($leadId, post_string('status', 'discovered'), post_string('notes'));
+        flash('Lead atualizado.');
+        redirect('?page=lead&id=' . $leadId);
+    }
+
+    if ($page === 'lead' && $action === 'suppress') {
+        $leadId = post_int('lead_id');
+        $email = post_string('email');
+        $leadRepo->suppress($email, 'Bloqueio manual');
+        $leadRepo->updateLead($leadId, 'ignored', post_string('notes'));
+        flash('Lead bloqueado e marcado como ignorado.');
+        redirect('?page=lead&id=' . $leadId);
     }
 
     if ($page === 'campaigns' && $action === 'create_campaign') {
@@ -207,11 +226,20 @@ function handle_post_actions(
     }
 
     if ($page === 'updates' && in_array($action, ['save_update_settings', 'check_updates'], true)) {
-        $manifestUrl = post_string('update_manifest_url');
-        if ($manifestUrl !== '' && !filter_var($manifestUrl, FILTER_VALIDATE_URL)) {
-            throw new RuntimeException('Informe uma URL valida para o manifesto de atualizacao.');
+        $current = $settingsRepo->all();
+        $githubRepo = post_string('github_repo', 'Lhsa050/scrappingyoutube');
+        $githubBranch = post_string('github_branch', 'main');
+        $githubToken = post_string('github_token') !== '' ? post_string('github_token') : (string) ($current['github_token'] ?? '');
+
+        if (!preg_match('/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/', $githubRepo)) {
+            throw new RuntimeException('Repositorio GitHub invalido. Use usuario/repositorio.');
         }
-        $settingsRepo->save(['update_manifest_url' => $manifestUrl]);
+
+        $settingsRepo->save([
+            'github_repo' => $githubRepo,
+            'github_branch' => $githubBranch,
+            'github_token' => $githubToken,
+        ]);
 
         $updater = new UpdaterService($settingsRepo);
 
@@ -246,7 +274,7 @@ function app_header(string $active): void
     echo '<link rel="stylesheet" href="assets/app.css"></head><body>';
     echo '<aside class="sidebar"><div class="brand"><span class="mark">CO</span><strong>' . h((string) Config::get('APP_NAME', 'Creator Outreach CRM')) . '</strong></div><nav>';
     foreach ($nav as $key => $label) {
-        $class = $active === $key ? 'active' : '';
+        $class = $active === $key || ($active === 'lead' && $key === 'leads') ? 'active' : '';
         echo '<a class="' . $class . '" href="?page=' . h($key) . '">' . h($label) . '</a>';
     }
     echo '</nav><a class="logout" href="?page=logout">Sair</a></aside>';
@@ -294,15 +322,19 @@ function login_page(): void
 function dashboard_page(LeadRepository $leadRepo, CampaignRepository $campaignRepo): void
 {
     $stats = $leadRepo->stats();
+    $queueStats = $campaignRepo->queueStats();
     $jobs = $leadRepo->recentJobs(6);
     $campaigns = array_slice($campaignRepo->all(), 0, 6);
+    $recentLeads = $leadRepo->leads(['active' => '1'], 6);
 
-    echo '<section class="topbar"><h1>Visao geral</h1><p>' . h(date('d/m/Y H:i')) . '</p></section>';
+    echo '<section class="topbar"><div><p class="eyebrow">Operacao</p><h1>Visao geral</h1></div><p>' . h(date('d/m/Y H:i')) . '</p></section>';
     echo '<section class="metrics">';
-    metric('Leads totais', (string) $stats['leads']);
-    metric('Leads ativos', (string) $stats['active_leads']);
-    metric('Videos salvos', (string) $stats['videos']);
-    metric('Na fila', (string) $stats['queued']);
+    metric('Leads ativos', format_int((int) $stats['active_leads']), 'Total coletado: ' . format_int((int) $stats['leads']));
+    metric('Qualificados', format_int((int) $stats['qualified_leads']), 'Novos 7 dias: ' . format_int((int) $stats['new_leads_7d']));
+    metric('Videos salvos', format_int((int) $stats['videos']), 'Buscas abertas: ' . format_int((int) $stats['running_jobs']));
+    metric('Fila pendente', format_int((int) $queueStats['queued']), 'Enviados: ' . format_int((int) $queueStats['sent']));
+    metric('Falhas de envio', format_int((int) $queueStats['failed']), 'Bloqueados: ' . format_int((int) $stats['suppressed']));
+    metric('Ignorados', format_int((int) $stats['ignored_leads']), 'Nao entram em campanha');
     echo '</section>';
 
     echo '<section class="grid two">';
@@ -312,11 +344,19 @@ function dashboard_page(LeadRepository $leadRepo, CampaignRepository $campaignRe
     echo '<div class="panel"><div class="panel-head"><h2>Campanhas</h2><a href="?page=campaigns">Ver campanhas</a></div>';
     campaigns_table($campaigns);
     echo '</div></section>';
+
+    echo '<section class="panel"><div class="panel-head"><h2>Leads recentes</h2><a href="?page=leads">Ver leads</a></div>';
+    leads_table($recentLeads, false);
+    echo '</section>';
 }
 
-function metric(string $label, string $value): void
+function metric(string $label, string $value, string $detail = ''): void
 {
-    echo '<div class="metric"><span>' . h($label) . '</span><strong>' . h($value) . '</strong></div>';
+    echo '<div class="metric"><span>' . h($label) . '</span><strong>' . h($value) . '</strong>';
+    if ($detail !== '') {
+        echo '<small>' . h($detail) . '</small>';
+    }
+    echo '</div>';
 }
 
 function jobs_page(LeadRepository $repo, array $categories): void
@@ -350,10 +390,14 @@ function jobs_table(array $jobs, bool $actions): void
         echo '<tr>';
         echo '<td>#' . h((string) $job['id']) . '</td>';
         echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) ($job['category_name'] ?? '')) . '</span></td>';
-        echo '<td><span class="status ' . h((string) $job['status']) . '">' . h((string) $job['status']) . '</span></td>';
-        echo '<td>' . h((string) $job['pages_processed']) . '/' . h((string) $job['max_pages']) . '</td>';
-        echo '<td>' . h((string) $job['videos_checked']) . '</td>';
-        echo '<td>' . h((string) $job['emails_found']) . '</td>';
+        echo '<td>' . status_badge((string) $job['status']);
+        if (!empty($job['error_message'])) {
+            echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
+        }
+        echo '</td>';
+        echo '<td>' . h(format_int((int) $job['pages_processed'])) . '/' . h(format_int((int) $job['max_pages'])) . '</td>';
+        echo '<td>' . h(format_int((int) $job['videos_checked'])) . '</td>';
+        echo '<td>' . h(format_int((int) $job['emails_found'])) . '</td>';
         echo '<td>';
         if ($actions && in_array($job['status'], ['pending', 'running'], true)) {
             echo '<form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="run_job"><input type="hidden" name="job_id" value="' . h((string) $job['id']) . '"><button type="submit" class="secondary">Rodar</button></form>';
@@ -372,10 +416,18 @@ function leads_page(LeadRepository $repo, array $categories): void
         'category_id' => (int) ($_GET['category_id'] ?? 0),
         'q' => (string) ($_GET['q'] ?? ''),
         'active' => (string) ($_GET['active'] ?? '1'),
+        'status' => (string) ($_GET['status'] ?? ''),
     ];
     $leads = $repo->leads($filters);
+    $stats = $repo->stats();
 
-    echo '<section class="topbar"><h1>Leads encontrados</h1><a class="button" href="' . h(current_path(['export' => 'csv'])) . '">Exportar CSV</a></section>';
+    echo '<section class="topbar"><div><p class="eyebrow">Controle de contatos</p><h1>Leads encontrados</h1></div><a class="button" href="' . h(current_path(['export' => 'csv'])) . '">Exportar CSV</a></section>';
+    echo '<section class="metrics compact">';
+    metric('Ativos', format_int((int) $stats['active_leads']));
+    metric('Qualificados', format_int((int) $stats['qualified_leads']));
+    metric('Ignorados', format_int((int) $stats['ignored_leads']));
+    metric('Bloqueados', format_int((int) $stats['suppressed']));
+    echo '</section>';
     echo '<section class="panel">';
     echo '<form method="get" class="filters"><input type="hidden" name="page" value="leads">';
     echo '<label>Categoria<select name="category_id"><option value="0">Todas</option>';
@@ -385,25 +437,123 @@ function leads_page(LeadRepository $repo, array $categories): void
     }
     echo '</select></label>';
     echo '<label>Busca<input name="q" value="' . h($filters['q']) . '" placeholder="email ou canal"></label>';
-    echo '<label>Ativos<select name="active"><option value="1" ' . ($filters['active'] === '1' ? 'selected' : '') . '>Sim</option><option value="0" ' . ($filters['active'] === '0' ? 'selected' : '') . '>Todos</option></select></label>';
+    echo '<label>Status<select name="status"><option value="">Todos</option>';
+    foreach (lead_status_options() as $value => $label) {
+        $selected = $filters['status'] === $value ? 'selected' : '';
+        echo '<option value="' . h($value) . '" ' . $selected . '>' . h($label) . '</option>';
+    }
+    echo '</select></label>';
+    echo '<label>Ativos<select name="active"><option value="1" ' . ($filters['active'] === '1' ? 'selected' : '') . '>Somente ativos</option><option value="0" ' . ($filters['active'] === '0' ? 'selected' : '') . '>Todos</option></select></label>';
     echo '<button type="submit">Filtrar</button></form>';
     echo '</section>';
 
-    echo '<section class="panel"><div class="table-wrap"><table><thead><tr><th>E-mail</th><th>Categoria</th><th>Canal</th><th>Origem</th><th>Status</th><th></th></tr></thead><tbody>';
+    echo '<section class="panel">';
+    leads_table($leads, true);
+    echo '</section>';
+}
+
+function leads_table(array $leads, bool $actions): void
+{
+    echo '<div class="table-wrap"><table class="leads-table"><thead><tr><th>E-mail</th><th>Controle</th><th>Categoria e canal</th><th>Origem</th><th>Contexto</th><th></th></tr></thead><tbody>';
     foreach ($leads as $lead) {
+        $sourceUrl = (string) ($lead['latest_source_url'] ?? '');
         echo '<tr>';
-        echo '<td><strong>' . h((string) $lead['email']) . '</strong><span>visto em ' . h((string) $lead['last_seen_at']) . '</span></td>';
-        echo '<td>' . h((string) $lead['category_name']) . '</td>';
-        echo '<td>' . h((string) $lead['channel_title']) . '</td>';
-        echo '<td><a href="' . h((string) $lead['latest_source_url']) . '" target="_blank" rel="noopener">Abrir video</a></td>';
-        echo '<td><span class="status ' . h((string) $lead['status']) . '">' . h((string) $lead['status']) . '</span></td>';
-        echo '<td><form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="suppress"><input type="hidden" name="email" value="' . h((string) $lead['email']) . '"><button class="secondary" type="submit">Bloquear</button></form></td>';
+        echo '<td><a class="lead-email" href="?page=lead&id=' . h((string) $lead['id']) . '">' . h((string) $lead['email']) . '</a><span>visto em ' . h(format_date((string) $lead['last_seen_at'])) . '</span></td>';
+        echo '<td>' . status_badge((string) $lead['status']);
+        if ((int) ($lead['suppressed'] ?? 0) > 0) {
+            echo '<span class="status blocked">bloqueado</span>';
+        }
+        echo '</td>';
+        echo '<td><strong>' . h((string) $lead['category_name']) . '</strong><span>' . h((string) $lead['channel_title']) . '</span></td>';
+        echo '<td><strong>' . h(format_int((int) ($lead['source_count'] ?? 0))) . ' fonte(s)</strong>';
+        echo '<span>' . h(truncate_text((string) ($lead['latest_video_title'] ?? ''), 80)) . '</span>';
+        if ($sourceUrl !== '') {
+            echo '<a href="' . h($sourceUrl) . '" target="_blank" rel="noopener">Abrir video</a>';
+        }
+        echo '</td>';
+        echo '<td><span class="context-preview">' . h(truncate_text((string) ($lead['latest_context'] ?? ''), 150)) . '</span></td>';
+        echo '<td class="actions-cell">';
+        if ($actions) {
+            echo '<a class="button secondary-link" href="?page=lead&id=' . h((string) $lead['id']) . '">Detalhes</a>';
+            echo '<form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="suppress"><input type="hidden" name="email" value="' . h((string) $lead['email']) . '"><button class="secondary" type="submit">Bloquear</button></form>';
+        }
+        echo '</td>';
         echo '</tr>';
     }
     if ($leads === []) {
         echo '<tr><td colspan="6" class="empty">Nenhum lead encontrado com esses filtros.</td></tr>';
     }
-    echo '</tbody></table></div></section>';
+    echo '</tbody></table></div>';
+}
+
+function lead_detail_page(LeadRepository $repo): void
+{
+    $id = (int) ($_GET['id'] ?? 0);
+    $lead = $repo->findLead($id);
+
+    if (!$lead) {
+        echo '<section class="topbar"><div><p class="eyebrow">Lead</p><h1>Lead nao encontrado</h1></div><a class="button secondary-link" href="?page=leads">Voltar</a></section>';
+        echo '<section class="panel"><p>Nao encontramos esse contato na base.</p></section>';
+        return;
+    }
+
+    $sources = $repo->leadSources($id);
+
+    echo '<section class="topbar"><div><p class="eyebrow">Lead</p><h1>' . h((string) $lead['email']) . '</h1></div><a class="button secondary-link" href="?page=leads">Voltar aos leads</a></section>';
+    echo '<section class="metrics compact">';
+    metric('Fontes encontradas', format_int((int) $lead['source_count']));
+    metric('Entradas na fila', format_int((int) $lead['queue_total']));
+    metric('E-mails enviados', format_int((int) $lead['sent_total']));
+    metric('Falhas', format_int((int) $lead['failed_total']));
+    echo '</section>';
+
+    echo '<section class="grid two">';
+    echo '<div class="panel profile-panel">';
+    echo '<div class="panel-head"><h2>Contato</h2>' . status_badge((string) $lead['status']) . '</div>';
+    echo '<dl class="detail-list">';
+    echo '<dt>Categoria</dt><dd>' . h((string) $lead['category_name']) . '</dd>';
+    echo '<dt>Canal</dt><dd>' . h((string) $lead['channel_title']) . '</dd>';
+    echo '<dt>Primeiro achado</dt><dd>' . h(format_date((string) $lead['first_seen_at'])) . '</dd>';
+    echo '<dt>Ultimo achado</dt><dd>' . h(format_date((string) $lead['last_seen_at'])) . '</dd>';
+    echo '<dt>Ultimo contato</dt><dd>' . h(format_date((string) ($lead['last_contacted_at'] ?? ''))) . '</dd>';
+    echo '<dt>Bloqueio</dt><dd>' . ((int) $lead['suppressed'] > 0 ? '<span class="status blocked">bloqueado</span>' : '<span class="muted">nao bloqueado</span>') . '</dd>';
+    echo '</dl>';
+    echo '</div>';
+
+    echo '<div class="panel">';
+    echo '<div class="panel-head"><h2>Qualificacao</h2></div>';
+    echo '<form method="post" class="stack-form">';
+    echo csrf_field() . '<input type="hidden" name="action" value="update_lead"><input type="hidden" name="lead_id" value="' . h((string) $lead['id']) . '">';
+    echo '<label>Status<select name="status">';
+    foreach (lead_status_options() as $value => $label) {
+        $selected = (string) $lead['status'] === $value ? 'selected' : '';
+        echo '<option value="' . h($value) . '" ' . $selected . '>' . h($label) . '</option>';
+    }
+    echo '</select></label>';
+    echo '<label>Notas<textarea name="notes" rows="8" placeholder="Anote observacoes sobre esse contato, potencial de parceria ou restricoes.">' . h((string) ($lead['notes'] ?? '')) . '</textarea></label>';
+    echo '<div class="form-actions split-actions"><button type="submit" class="secondary">Salvar lead</button></div>';
+    echo '</form>';
+    echo '<form method="post" class="danger-form">';
+    echo csrf_field() . '<input type="hidden" name="action" value="suppress"><input type="hidden" name="lead_id" value="' . h((string) $lead['id']) . '"><input type="hidden" name="email" value="' . h((string) $lead['email']) . '"><input type="hidden" name="notes" value="' . h((string) ($lead['notes'] ?? '')) . '">';
+    echo '<button type="submit" class="ghost-danger">Bloquear e ignorar</button>';
+    echo '</form>';
+    echo '</div>';
+    echo '</section>';
+
+    echo '<section class="panel"><div class="panel-head"><h2>Fontes do e-mail</h2><span class="muted">' . h(format_int(count($sources))) . ' registro(s)</span></div>';
+    echo '<div class="source-list">';
+    foreach ($sources as $source) {
+        $url = (string) ($source['youtube_url'] ?: $source['source_url']);
+        echo '<article class="source-item">';
+        echo '<div><a class="source-title" href="' . h($url) . '" target="_blank" rel="noopener">' . h((string) $source['video_title']) . '</a>';
+        echo '<span>' . h((string) $source['channel_title']) . ' - ' . h(format_int((int) $source['view_count'])) . ' views - ' . h(format_date((string) ($source['published_at'] ?? ''))) . '</span></div>';
+        echo '<pre class="context-block">' . h((string) ($source['found_context'] ?? '')) . '</pre>';
+        echo '</article>';
+    }
+    if ($sources === []) {
+        echo '<p class="empty">Nenhuma fonte registrada para esse lead.</p>';
+    }
+    echo '</div></section>';
 }
 
 function campaigns_page(CampaignRepository $campaignRepo, array $categories): void
@@ -440,14 +590,15 @@ function campaigns_page(CampaignRepository $campaignRepo, array $categories): vo
 
 function campaigns_table(array $campaigns, bool $actions = false): void
 {
-    echo '<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Categoria</th><th>Status</th><th>Fila</th><th>Enviados</th><th></th></tr></thead><tbody>';
+    echo '<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Categoria</th><th>Status</th><th>Fila</th><th>Enviados</th><th>Falhas</th><th></th></tr></thead><tbody>';
     foreach ($campaigns as $campaign) {
         echo '<tr>';
         echo '<td><strong>' . h((string) $campaign['name']) . '</strong><span>' . h((string) $campaign['product_name']) . '</span></td>';
         echo '<td>' . h((string) $campaign['category_name']) . '</td>';
-        echo '<td><span class="status ' . h((string) $campaign['status']) . '">' . h((string) $campaign['status']) . '</span></td>';
-        echo '<td>' . h((string) $campaign['queued_total']) . '</td>';
-        echo '<td>' . h((string) $campaign['sent_total']) . '</td>';
+        echo '<td>' . status_badge((string) $campaign['status']) . '</td>';
+        echo '<td>' . h(format_int((int) $campaign['queued_total'])) . '</td>';
+        echo '<td>' . h(format_int((int) $campaign['sent_total'])) . '</td>';
+        echo '<td>' . h(format_int((int) ($campaign['failed_total'] ?? 0))) . '</td>';
         echo '<td>';
         if ($actions) {
             echo '<form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="queue_campaign"><input type="hidden" name="campaign_id" value="' . h((string) $campaign['id']) . '"><button type="submit" class="secondary">Enfileirar</button></form>';
@@ -455,7 +606,7 @@ function campaigns_table(array $campaigns, bool $actions = false): void
         echo '</td></tr>';
     }
     if ($campaigns === []) {
-        echo '<tr><td colspan="6" class="empty">Nenhuma campanha criada.</td></tr>';
+        echo '<tr><td colspan="7" class="empty">Nenhuma campanha criada.</td></tr>';
     }
     echo '</tbody></table></div>';
 }
@@ -497,20 +648,22 @@ function updates_page(SettingsRepository $settingsRepo): void
     $settings = $settingsRepo->all();
     $check = $_SESSION['update_check'] ?? null;
 
-    echo '<section class="topbar"><h1>Atualizacoes</h1><p>Verifique versoes e baixe o pacote para subir pela Hostinger.</p></section>';
+    echo '<section class="topbar"><h1>Atualizacoes</h1><p>Verifique novas versoes direto no GitHub.</p></section>';
 
     echo '<section class="metrics">';
     metric('Versao instalada', $updater->currentVersion());
     metric('Ultima verificada', is_array($check) ? (string) $check['latest_version'] : '-');
     metric('Status', is_array($check) && $check['available'] ? 'Atualizacao disponivel' : 'Sem atualizacao');
-    metric('Aplicacao', 'manual');
+    metric('Origem', 'GitHub');
     echo '</section>';
 
     echo '<section class="panel">';
     echo '<form method="post" class="campaign-form">';
     echo csrf_field();
-    settings_input('URL do manifesto', 'update_manifest_url', (string) $settings['update_manifest_url'], 'url');
-    echo '<div class="form-actions"><button type="submit" name="action" value="save_update_settings" class="secondary">Salvar URL</button><button type="submit" name="action" value="check_updates">Buscar atualizacoes</button></div>';
+    settings_input('Repositorio GitHub', 'github_repo', (string) $settings['github_repo']);
+    settings_input('Branch', 'github_branch', (string) $settings['github_branch']);
+    settings_input('Token GitHub opcional', 'github_token', '', 'password');
+    echo '<div class="form-actions"><button type="submit" name="action" value="save_update_settings" class="secondary">Salvar GitHub</button><button type="submit" name="action" value="check_updates">Buscar atualizacoes</button></div>';
     echo '</form>';
     echo '</section>';
 
@@ -533,15 +686,15 @@ function updates_page(SettingsRepository $settingsRepo): void
         if ($check['available']) {
             $packageUrl = (string) ($manifest['package_url'] ?? '');
             echo '<div class="update-steps">';
-            echo '<p><strong>Novo metodo seguro:</strong> baixe o pacote, suba no Gerenciador de Arquivos da Hostinger e extraia por cima da instalacao.</p>';
+            echo '<p><strong>Metodo seguro:</strong> baixe o ZIP do GitHub, suba no Gerenciador de Arquivos da Hostinger e copie os arquivos por cima da instalacao.</p>';
             if ($packageUrl !== '') {
-                echo '<p><a class="button" href="' . h($packageUrl) . '" target="_blank" rel="noopener">Baixar pacote ZIP</a></p>';
+                echo '<p><a class="button" href="' . h($packageUrl) . '" target="_blank" rel="noopener">Baixar ZIP do GitHub</a></p>';
             }
             echo '<ol>';
             echo '<li>Baixe o ZIP acima.</li>';
-            echo '<li>No hPanel, abra o Gerenciador de Arquivos.</li>';
-            echo '<li>Entre em <strong>public_html</strong>.</li>';
-            echo '<li>Envie o ZIP e clique em <strong>Extrair</strong>.</li>';
+            echo '<li>Extraia o ZIP no seu computador ou no Gerenciador de Arquivos.</li>';
+            echo '<li>Entre na pasta extraida do GitHub.</li>';
+            echo '<li>Envie o conteudo dessa pasta para <strong>public_html</strong>.</li>';
             echo '<li>Se perguntar, escolha substituir arquivos existentes.</li>';
             echo '<li>Nao apague <strong>.env</strong> nem <strong>storage</strong>.</li>';
             echo '<li>Depois abra <strong>/repair.php</strong> uma vez para checar arquivos e banco.</li>';
@@ -559,7 +712,7 @@ function input(string $label, string $name, string $value = '', string $type = '
 
 function settings_input(string $label, string $name, string $value = '', string $type = 'text'): void
 {
-    $placeholder = $name === 'smtp_password' ? 'Preencha somente se quiser alterar' : '';
+    $placeholder = in_array($name, ['smtp_password', 'github_token'], true) ? 'Preencha somente se quiser alterar' : '';
     echo '<label>' . h($label) . '<input type="' . h($type) . '" name="' . h($name) . '" value="' . h($value) . '" placeholder="' . h($placeholder) . '"></label>';
 }
 
@@ -570,6 +723,76 @@ function select_field(string $label, string $name, array $options, string $selec
         echo '<option value="' . h((string) $value) . '" ' . ($selected === (string) $value ? 'selected' : '') . '>' . h((string) $text) . '</option>';
     }
     echo '</select></label>';
+}
+
+/**
+ * @return array<string, string>
+ */
+function lead_status_options(): array
+{
+    return [
+        'discovered' => 'Descoberto',
+        'qualified' => 'Qualificado',
+        'ignored' => 'Ignorado',
+    ];
+}
+
+function status_badge(string $status): string
+{
+    $status = strtolower(trim($status));
+    $class = preg_replace('/[^a-z0-9_-]/', '', $status) ?: 'unknown';
+    $labels = [
+        'pending' => 'pendente',
+        'running' => 'rodando',
+        'completed' => 'concluido',
+        'failed' => 'falhou',
+        'draft' => 'rascunho',
+        'queued' => 'na fila',
+        'sent' => 'enviado',
+        'discovered' => 'descoberto',
+        'qualified' => 'qualificado',
+        'ignored' => 'ignorado',
+        'unsubscribed' => 'descadastrado',
+        'blocked' => 'bloqueado',
+    ];
+
+    return '<span class="status ' . h($class) . '">' . h($labels[$status] ?? $status) . '</span>';
+}
+
+function format_int(int $value): string
+{
+    return number_format($value, 0, ',', '.');
+}
+
+function format_date(?string $value): string
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return '-';
+    }
+
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return $value;
+    }
+
+    return date('d/m/Y H:i', $timestamp);
+}
+
+function truncate_text(?string $value, int $limit = 120): string
+{
+    $value = trim(preg_replace('/\s+/', ' ', (string) $value) ?? '');
+    if ($value === '') {
+        return '-';
+    }
+
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        return mb_strlen($value, 'UTF-8') > $limit
+            ? mb_substr($value, 0, max(0, $limit - 3), 'UTF-8') . '...'
+            : $value;
+    }
+
+    return strlen($value) > $limit ? substr($value, 0, max(0, $limit - 3)) . '...' : $value;
 }
 
 function default_campaign_body(): string

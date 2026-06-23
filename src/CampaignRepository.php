@@ -40,11 +40,29 @@ final class CampaignRepository
         return $this->pdo->query(
             'SELECT ca.*, c.name AS category_name,
                     (SELECT COUNT(*) FROM email_queue q WHERE q.campaign_id = ca.id) AS queued_total,
-                    (SELECT COUNT(*) FROM email_queue q WHERE q.campaign_id = ca.id AND q.status = \'sent\') AS sent_total
+                    (SELECT COUNT(*) FROM email_queue q WHERE q.campaign_id = ca.id AND q.status = \'sent\') AS sent_total,
+                    (SELECT COUNT(*) FROM email_queue q WHERE q.campaign_id = ca.id AND q.status = \'failed\') AS failed_total
              FROM campaigns ca
              JOIN categories c ON c.id = ca.category_id
              ORDER BY ca.id DESC'
         )->fetchAll();
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function queueStats(): array
+    {
+        $stats = ['queued' => 0, 'sent' => 0, 'failed' => 0];
+        $rows = $this->pdo->query('SELECT status, COUNT(*) AS total FROM email_queue GROUP BY status')->fetchAll();
+        foreach ($rows as $row) {
+            $status = (string) $row['status'];
+            if (array_key_exists($status, $stats)) {
+                $stats[$status] = (int) $row['total'];
+            }
+        }
+
+        return $stats;
     }
 
     public function find(int $id): ?array
@@ -78,6 +96,7 @@ final class CampaignRepository
              LEFT JOIN suppression_list s ON s.email = l.email
              WHERE l.category_id = :category_id
                AND l.unsubscribed_at IS NULL
+               AND l.status IN (\'discovered\', \'qualified\')
                AND s.id IS NULL
              ORDER BY l.id ASC'
         );

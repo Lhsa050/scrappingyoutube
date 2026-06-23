@@ -8,7 +8,8 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 - Filtros de views minimas e maximas, pais, idioma, ordenacao e data minima.
 - Extracao de e-mails presentes em descricoes publicas dos videos.
 - Banco com categorias, canais, videos, leads e origem do achado.
-- Exportacao CSV.
+- Controle de leads com status, notas, fontes por video, bloqueio manual e exportacao CSV.
+- Dashboard operacional com leads ativos, qualificados, ignorados, fila, envios e falhas.
 - Campanhas com variaveis como `{{creator_name}}`, `{{niche}}`, `{{product_name}}`, `{{commission}}` e `{{unsubscribe_url}}`.
 - Fila de envio SMTP com limite por execucao.
 - Configuracao SMTP pelo painel, depois da instalacao.
@@ -88,39 +89,32 @@ Envio de e-mails, por exemplo a cada 5 ou 10 minutos:
 
 Controle o volume no painel em `Configuracoes`. Comece baixo, como `10` ou `20`, e aumente somente depois de validar entregabilidade.
 
-## Atualizacoes
+## Atualizacoes pelo GitHub
 
-Em hospedagem compartilhada, a forma mais estavel de atualizar e subir um pacote completo pelo Gerenciador de Arquivos da Hostinger. O painel apenas verifica a versao remota e mostra o pacote para baixar.
+A fonte oficial de atualizacoes e o repositorio GitHub:
+
+```text
+https://github.com/Lhsa050/scrappingyoutube
+```
+
+O painel consulta o arquivo `VERSION` no GitHub e compara com o `VERSION` instalado na hospedagem.
 
 Fluxo:
 
-1. Gere um pacote local com:
-
-```powershell
-.\tools\build-update.ps1 -Version "1.1.0" -BaseUrl "https://seudominio.com/updates" -Notes "Correcoes e melhorias"
-```
-
-2. Suba para a hospedagem, em uma pasta publica como `public_html/updates`:
-   - `build/creator-outreach-1.1.0.zip`
-   - `build/manifest.json`
+1. Atualize os arquivos no GitHub.
+2. Atualize o arquivo `VERSION` no GitHub para uma versao maior.
 3. No painel, abra `Atualizacoes`.
-4. Informe a URL do manifesto, por exemplo:
-
-```text
-https://seudominio.com/updates/manifest.json
-```
-
+4. Configure:
+   - Repositorio GitHub: `Lhsa050/scrappingyoutube`
+   - Branch: `main`
+   - Token GitHub: somente se o repositorio for privado
 5. Clique em `Buscar atualizacoes`.
-6. Se houver nova versao, baixe o ZIP indicado.
-7. No hPanel, abra o Gerenciador de Arquivos, entre em `public_html`, envie o ZIP e extraia por cima da instalacao.
+6. Se houver nova versao, baixe o ZIP do GitHub.
+7. Extraia o ZIP e envie o conteudo da pasta extraida para `public_html`, substituindo arquivos existentes.
 8. Nao apague `.env` nem `storage`.
 9. Depois abra `/repair.php`, digite a senha admin e clique em reparar para conferir arquivos, permissoes e banco.
 
-O pacote:
-
-- preserva `.env` e `storage`;
-- inclui `repair.php` para recuperar o painel se algum arquivo ficar com permissao ruim;
-- evita o PHP tentando sobrescrever arquivos dele mesmo enquanto esta rodando.
+Se o repositorio for privado, crie um token GitHub com permissao de leitura de conteudo e salve no painel em `Atualizacoes`.
 
 ## Fluxo de uso
 
@@ -131,7 +125,7 @@ O pacote:
    - Views minimas: `10000`
    - Views maximas: `100000`
 3. Rode manualmente pelo botao `Rodar` ou aguarde o cron.
-4. Revise os leads em `Leads`.
+4. Revise os leads em `Leads`, abra `Detalhes`, qualifique contatos bons e ignore ou bloqueie contatos que nao devem receber campanha.
 5. Configure SMTP em `Configuracoes`.
 6. Crie uma campanha em `Campanhas`.
 7. Clique em `Enfileirar`.
