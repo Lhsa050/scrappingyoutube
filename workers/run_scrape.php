@@ -5,9 +5,10 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/bootstrap.php';
 
 $repo = new LeadRepository(Database::pdo());
+$settings = new SettingsRepository(Database::pdo());
 $service = new ScrapeService(
     $repo,
-    new YouTubeClient((string) Config::get('YOUTUBE_API_KEY', '')),
+    new YouTubeClient($settings->youtubeApiKeys()),
     new EmailExtractor()
 );
 

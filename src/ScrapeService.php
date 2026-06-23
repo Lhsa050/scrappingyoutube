@@ -27,6 +27,7 @@ final class ScrapeService
             'status' => 'running',
             'started_at' => $job['started_at'] ?: Database::now(),
             'error_message' => null,
+            'quota_retry_at' => null,
         ]);
 
         try {
@@ -142,6 +143,22 @@ final class ScrapeService
                 'emails_found' => $emailsFound,
             ];
         } catch (Throwable $exception) {
+            if ($this->isQuotaPause($exception)) {
+                $this->leads->updateJob((int) $job['id'], [
+                    'status' => 'quota_wait',
+                    'error_message' => $exception->getMessage(),
+                    'quota_retry_at' => $this->quotaRetryAt(),
+                    'finished_at' => null,
+                ]);
+
+                return [
+                    'job_id' => (int) $job['id'],
+                    'status' => 'quota_wait',
+                    'videos_checked' => 0,
+                    'emails_found' => 0,
+                ];
+            }
+
             $this->leads->updateJob((int) $job['id'], [
                 'status' => 'failed',
                 'error_message' => $exception->getMessage(),
@@ -202,6 +219,20 @@ final class ScrapeService
         ];
 
         return trim(implode(' ', array_unique(array_filter(array_map('trim', $parts)))));
+    }
+
+    private function isQuotaPause(Throwable $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+        return str_contains($message, 'quota')
+            || str_contains($message, 'limite temporario')
+            || str_contains($message, 'limite gratuito')
+            || str_contains($message, 'chaves gratuitas');
+    }
+
+    private function quotaRetryAt(): string
+    {
+        return (new DateTimeImmutable('+6 hours'))->format('Y-m-d H:i:s');
     }
 
     private function matchesPrecisionFilters(array $video, array $channel, array $job): bool

@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   error_message TEXT NULL,
   started_at TEXT NULL,
   finished_at TEXT NULL,
+  quota_retry_at TEXT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT

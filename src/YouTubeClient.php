@@ -6,10 +6,17 @@ final class YouTubeClient
 {
     private const BASE_URL = 'https://www.googleapis.com/youtube/v3/';
 
-    public function __construct(private readonly string $apiKey)
+    /** @var array<int, string> */
+    private array $apiKeys;
+
+    /**
+     * @param string|array<int, string> $apiKeys
+     */
+    public function __construct(string|array $apiKeys)
     {
-        if ($this->apiKey === '') {
-            throw new RuntimeException('Defina YOUTUBE_API_KEY no arquivo .env.');
+        $this->apiKeys = $this->normalizeApiKeys($apiKeys);
+        if ($this->apiKeys === []) {
+            throw new RuntimeException('Defina pelo menos uma chave gratuita da YouTube Data API.');
         }
     }
 
@@ -28,7 +35,6 @@ final class YouTubeClient
             'regionCode' => $params['regionCode'] ?? null,
             'relevanceLanguage' => $params['relevanceLanguage'] ?? null,
             'publishedAfter' => $params['publishedAfter'] ?? null,
-            'key' => $this->apiKey,
         ], static fn ($value) => $value !== null && $value !== '');
 
         return $this->request('search', $params);
@@ -48,7 +54,6 @@ final class YouTubeClient
         $response = $this->request('videos', [
             'part' => 'snippet,statistics,contentDetails',
             'id' => implode(',', array_slice($ids, 0, 50)),
-            'key' => $this->apiKey,
         ]);
 
         return $response['items'] ?? [];
@@ -68,7 +73,6 @@ final class YouTubeClient
         $response = $this->request('channels', [
             'part' => 'statistics,snippet',
             'id' => implode(',', array_slice($ids, 0, 50)),
-            'key' => $this->apiKey,
         ]);
 
         return $response['items'] ?? [];
@@ -79,20 +83,107 @@ final class YouTubeClient
      */
     private function request(string $endpoint, array $params): array
     {
-        $url = self::BASE_URL . $endpoint . '?' . http_build_query($params);
-        $body = $this->httpGet($url);
-        $json = json_decode($body, true);
+        $keyErrors = [];
 
-        if (!is_array($json)) {
-            throw new RuntimeException('Resposta invalida da API do YouTube.');
+        foreach ($this->apiKeys as $index => $apiKey) {
+            $requestParams = $params;
+            $requestParams['key'] = $apiKey;
+            $url = self::BASE_URL . $endpoint . '?' . http_build_query($requestParams);
+            $body = $this->httpGet($url);
+            $json = json_decode($body, true);
+
+            if (!is_array($json)) {
+                throw new RuntimeException('Resposta invalida da API do YouTube.');
+            }
+
+            if (!isset($json['error'])) {
+                return $json;
+            }
+
+            $message = (string) ($json['error']['message'] ?? 'Erro desconhecido da API do YouTube.');
+            $reason = $this->errorReason($json);
+            if (!$this->shouldTryNextKey($reason, $message)) {
+                throw new RuntimeException($message);
+            }
+
+            $keyErrors[] = 'chave ' . ($index + 1) . ': ' . $message;
         }
 
-        if (isset($json['error'])) {
-            $message = $json['error']['message'] ?? 'Erro desconhecido da API do YouTube.';
-            throw new RuntimeException((string) $message);
+        if ($this->onlyQuotaErrors($keyErrors)) {
+            throw new RuntimeException('Todas as chaves gratuitas da YouTube Data API atingiram quota ou limite temporario.');
         }
 
-        return $json;
+        throw new RuntimeException('Nenhuma chave gratuita da YouTube Data API funcionou. ' . implode(' | ', $keyErrors));
+    }
+
+    /**
+     * @param string|array<int, string> $apiKeys
+     * @return array<int, string>
+     */
+    private function normalizeApiKeys(string|array $apiKeys): array
+    {
+        $raw = is_array($apiKeys) ? implode("\n", $apiKeys) : $apiKeys;
+        $parts = preg_split('/[\s,;]+/', $raw) ?: [];
+        $keys = [];
+        foreach ($parts as $part) {
+            $key = trim($part);
+            if ($key !== '') {
+                $keys[$key] = $key;
+            }
+        }
+
+        return array_values($keys);
+    }
+
+    /**
+     * @param array<string, mixed> $json
+     */
+    private function errorReason(array $json): string
+    {
+        $errors = $json['error']['errors'] ?? [];
+        if (is_array($errors) && isset($errors[0]['reason'])) {
+            return strtolower((string) $errors[0]['reason']);
+        }
+
+        return '';
+    }
+
+    private function shouldTryNextKey(string $reason, string $message): bool
+    {
+        $message = strtolower($message);
+        foreach ([
+            'quota',
+            'dailylimit',
+            'ratelimit',
+            'keyinvalid',
+            'accessnotconfigured',
+            'forbidden',
+        ] as $needle) {
+            if (str_contains($reason, $needle) || str_contains($message, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<int, string> $errors
+     */
+    private function onlyQuotaErrors(array $errors): bool
+    {
+        if ($errors === []) {
+            return false;
+        }
+
+        foreach ($errors as $error) {
+            $error = strtolower($error);
+            if (!str_contains($error, 'quota') && !str_contains($error, 'limit')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function httpGet(string $url): string

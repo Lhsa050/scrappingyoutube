@@ -94,8 +94,8 @@ final class LeadRepository
 
     public function runnableJobsCount(?string $batchId = null): int
     {
-        $sql = 'SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')';
-        $params = [];
+        $sql = 'SELECT COUNT(*) FROM scrape_jobs WHERE (status IN (\'pending\', \'running\') OR (status = \'quota_wait\' AND (quota_retry_at IS NULL OR quota_retry_at <= :now)))';
+        $params = ['now' => Database::now()];
         if ($batchId !== null && $batchId !== '') {
             $sql .= ' AND batch_id = :batch_id';
             $params['batch_id'] = $batchId;
@@ -110,7 +110,7 @@ final class LeadRepository
     {
         $stmt = $this->pdo->query(
             'SELECT batch_id FROM scrape_jobs
-             WHERE status IN (\'pending\', \'running\') AND batch_id IS NOT NULL AND batch_id <> \'\'
+             WHERE status IN (\'pending\', \'running\', \'quota_wait\') AND batch_id IS NOT NULL AND batch_id <> \'\'
              ORDER BY id DESC
              LIMIT 1'
         );
@@ -138,6 +138,7 @@ final class LeadRepository
                     COALESCE(SUM(emails_found), 0) AS emails_found,
                     COALESCE(SUM(CASE WHEN status = \'pending\' THEN 1 ELSE 0 END), 0) AS pending_jobs,
                     COALESCE(SUM(CASE WHEN status = \'running\' THEN 1 ELSE 0 END), 0) AS running_jobs,
+                    COALESCE(SUM(CASE WHEN status = \'quota_wait\' THEN 1 ELSE 0 END), 0) AS waiting_jobs,
                     COALESCE(SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END), 0) AS completed_jobs,
                     COALESCE(SUM(CASE WHEN status = \'failed\' THEN 1 ELSE 0 END), 0) AS failed_jobs
              FROM scrape_jobs ' . $where
@@ -150,10 +151,11 @@ final class LeadRepository
         $processedPages = (int) ($row['processed_pages'] ?? 0);
         $pendingJobs = (int) ($row['pending_jobs'] ?? 0);
         $runningJobs = (int) ($row['running_jobs'] ?? 0);
+        $waitingJobs = (int) ($row['waiting_jobs'] ?? 0);
         $failedJobs = (int) ($row['failed_jobs'] ?? 0);
         $activeJobs = $pendingJobs + $runningJobs;
         $percent = $totalPages > 0 ? min(100, (int) round(($processedPages / $totalPages) * 100)) : ($totalJobs > 0 ? 100 : 0);
-        $status = $totalJobs === 0 ? 'idle' : ($activeJobs > 0 ? 'running' : ($failedJobs > 0 ? 'failed' : 'completed'));
+        $status = $totalJobs === 0 ? 'idle' : ($activeJobs > 0 ? 'running' : ($waitingJobs > 0 ? 'quota_wait' : ($failedJobs > 0 ? 'failed' : 'completed')));
 
         return [
             'status' => $status,
@@ -162,6 +164,7 @@ final class LeadRepository
             'total_jobs' => $totalJobs,
             'pending_jobs' => $pendingJobs,
             'running_jobs' => $runningJobs,
+            'waiting_jobs' => $waitingJobs,
             'completed_jobs' => (int) ($row['completed_jobs'] ?? 0),
             'failed_jobs' => $failedJobs,
             'total_pages' => $totalPages,
@@ -175,15 +178,15 @@ final class LeadRepository
     {
         if ($id !== null) {
             $stmt = $this->pdo->prepare(
-                'SELECT * FROM scrape_jobs WHERE id = :id AND status IN (\'pending\', \'running\') LIMIT 1'
+                'SELECT * FROM scrape_jobs WHERE id = :id AND status IN (\'pending\', \'running\', \'quota_wait\') LIMIT 1'
             );
             $stmt->execute(['id' => $id]);
             $job = $stmt->fetch();
             return $job ?: null;
         }
 
-        $sql = 'SELECT * FROM scrape_jobs WHERE status IN (\'pending\', \'running\')';
-        $params = [];
+        $sql = 'SELECT * FROM scrape_jobs WHERE (status IN (\'pending\', \'running\') OR (status = \'quota_wait\' AND (quota_retry_at IS NULL OR quota_retry_at <= :now)))';
+        $params = ['now' => Database::now()];
         if ($batchId !== null && $batchId !== '') {
             $sql .= ' AND batch_id = :batch_id';
             $params['batch_id'] = $batchId;
@@ -398,7 +401,7 @@ final class LeadRepository
             'sent' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue WHERE status = \'sent\'')->fetchColumn(),
             'failed' => (int) $this->pdo->query('SELECT COUNT(*) FROM email_queue WHERE status = \'failed\'')->fetchColumn(),
             'suppressed' => (int) $this->pdo->query('SELECT COUNT(*) FROM suppression_list')->fetchColumn(),
-            'running_jobs' => (int) $this->pdo->query('SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')')->fetchColumn(),
+            'running_jobs' => (int) $this->pdo->query('SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\', \'quota_wait\')')->fetchColumn(),
         ];
     }
 

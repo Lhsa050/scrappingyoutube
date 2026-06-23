@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   error_message TEXT NULL,
   started_at DATETIME NULL,
   finished_at DATETIME NULL,
+  quota_retry_at DATETIME NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   INDEX scrape_jobs_batch_id_idx (batch_id),

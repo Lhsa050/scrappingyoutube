@@ -11,6 +11,7 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 - Controle de leads com status, notas, fontes por video, exclusao individual, limpeza geral, bloqueio manual e exportacao CSV.
 - Dashboard operacional com leads ativos, qualificados, ignorados, fila, envios e falhas.
 - Processamento automatico das buscas pelo painel e por cron, com barra de progresso por lote.
+- Rotacao gratuita de varias chaves da YouTube Data API, com pausa automatica quando todas atingem quota.
 - Limpeza de historico de buscas e opcao de apagar todos os dados operacionais pelo painel.
 - Campanhas com variaveis como `{{creator_name}}`, `{{niche}}`, `{{product_name}}`, `{{commission}}` e `{{unsubscribe_url}}`.
 - Fila de envio SMTP com limite por execucao.
@@ -55,7 +56,7 @@ O instalador vai:
 - criar `storage/installed.lock` para bloquear reinstalacao acidental;
 - mostrar os comandos de cron prontos para copiar no hPanel.
 
-Depois de instalar, entre no painel e abra `Configuracoes` para salvar SMTP, remetente, Reply-To e limite de emails por execucao do cron.
+Depois de instalar, entre no painel e abra `Configuracoes` para salvar SMTP, remetente, Reply-To, limite de emails por execucao do cron e chaves gratuitas extras da YouTube Data API.
 
 Se o sistema ja estiver instalado, o instalador mostra uma tela de bloqueio. Para reinstalar, remova manualmente `storage/installed.lock` e, se quiser refazer a configuracao, remova tambem `.env`.
 
@@ -124,6 +125,17 @@ O atualizador automatico vai:
 
 Se o repositorio for privado, crie um token GitHub com permissao de leitura de conteudo e salve no painel em `Atualizacoes`.
 
+## Modo gratuito anti-travamento
+
+O sistema usa somente a YouTube Data API oficial no modo gratuito. Para reduzir pausas por quota, crie mais de uma chave gratuita no Google Cloud e cole todas em `Configuracoes > YouTube gratis`, uma por linha.
+
+Durante a busca:
+
+- se uma chave atingir quota, o sistema tenta a proxima;
+- se todas atingirem quota, a busca entra em `aguardando quota`;
+- o progresso fica salvo no banco;
+- o cron e o painel tentam continuar automaticamente depois.
+
 ## Fluxo de uso
 
 1. Entre no painel.
@@ -141,7 +153,7 @@ Se o repositorio for privado, crie um token GitHub com permissao de leitura de c
    - Inscritos maximos: `30000`
 3. Depois de criar, a busca roda automaticamente pela tela. O cron tambem continua processando em lote se voce fechar o navegador.
 4. Revise os leads em `Leads`, abra `Detalhes`, qualifique contatos bons e ignore ou bloqueie contatos que nao devem receber campanha.
-5. Configure SMTP em `Configuracoes`.
+5. Configure SMTP e chaves extras do YouTube em `Configuracoes`.
 6. Crie uma campanha em `Campanhas`.
 7. Clique em `Enfileirar`.
 8. O cron `send_queue.php` enviara aos poucos.

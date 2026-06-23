@@ -68,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('ac
     try {
         $service = new ScrapeService(
             $leadRepo,
-            new YouTubeClient((string) Config::get('YOUTUBE_API_KEY', '')),
+            new YouTubeClient($settingsRepo->youtubeApiKeys()),
             new EmailExtractor()
         );
         json_response(['ok' => true] + $service->processBatch(null, 4, 25, $batchId === '' ? null : $batchId));
@@ -171,10 +171,14 @@ function handle_post_actions(
     if ($page === 'jobs' && $action === 'run_job') {
         $service = new ScrapeService(
             $leadRepo,
-            new YouTubeClient((string) Config::get('YOUTUBE_API_KEY', '')),
+            new YouTubeClient($settingsRepo->youtubeApiKeys()),
             new EmailExtractor()
         );
         $result = $service->process(post_int('job_id'));
+        if (($result['status'] ?? '') === 'quota_wait') {
+            flash('Busca pausada: todas as chaves gratuitas atingiram quota. O sistema tentara novamente mais tarde.', 'error');
+            redirect('?page=jobs');
+        }
         flash('Busca processada: ' . $result['videos_checked'] . ' videos, ' . $result['emails_found'] . ' e-mails.');
         redirect('?page=jobs');
     }
@@ -303,6 +307,14 @@ function handle_post_actions(
         }
 
         flash('Configuracoes de SMTP salvas.');
+        redirect('?page=settings');
+    }
+
+    if ($page === 'settings' && $action === 'save_youtube_settings') {
+        $settingsRepo->save([
+            'youtube_api_keys' => implode("\n", youtube_keys_input(post_string('youtube_api_keys'))),
+        ]);
+        flash('Chaves gratuitas do YouTube salvas.');
         redirect('?page=settings');
     }
 
@@ -541,7 +553,7 @@ function jobs_table(array $jobs, bool $actions): void
         echo '<td>' . h(format_int((int) $job['videos_checked'])) . '</td>';
         echo '<td>' . h(format_int((int) $job['emails_found'])) . '</td>';
         echo '<td>';
-        if ($actions && in_array($job['status'], ['pending', 'running'], true)) {
+        if ($actions && in_array($job['status'], ['pending', 'running', 'quota_wait'], true)) {
             echo '<form method="post" class="inline-form">' . csrf_field() . '<input type="hidden" name="action" value="run_job"><input type="hidden" name="job_id" value="' . h((string) $job['id']) . '"><button type="submit" class="secondary">Rodar</button></form>';
         }
         echo '</td></tr>';
@@ -604,6 +616,7 @@ function auto_runner_script(): void
     var labels = {
       idle: 'ocioso',
       running: 'rodando',
+      quota_wait: 'aguardando quota',
       completed: 'concluido',
       failed: 'falhou'
     };
@@ -653,6 +666,11 @@ function auto_runner_script(): void
         }
 
         stopped = true;
+        if (data.progress && data.progress.status === 'quota_wait') {
+          setStatus('Todas as chaves gratuitas atingiram quota. O sistema vai tentar novamente mais tarde.');
+          return;
+        }
+
         setStatus('Processamento finalizado.');
         window.setTimeout(function () {
           window.location.href = batchId ? '?page=jobs&batch_id=' + encodeURIComponent(batchId) : '?page=jobs';
@@ -911,6 +929,17 @@ function settings_page(SettingsRepository $settingsRepo): void
     echo '<div class="form-actions"><button type="submit" name="action" value="test_mail_settings" class="secondary">Salvar e testar</button><button type="submit" name="action" value="save_mail_settings">Salvar configuracoes</button></div>';
     echo '</form>';
     echo '</section>';
+
+    $youtubeKeys = $settingsRepo->youtubeApiKeys();
+    echo '<section class="panel">';
+    echo '<div class="panel-head"><h2>YouTube gratis</h2><span class="status ' . ($youtubeKeys === [] ? 'pending' : 'completed') . '">' . h(format_int(count($youtubeKeys))) . ' chave(s)</span></div>';
+    echo '<form method="post" class="stack-form">';
+    echo csrf_field();
+    echo '<label>Chaves da YouTube Data API, uma por linha<textarea name="youtube_api_keys" rows="5">' . h((string) $settings['youtube_api_keys']) . '</textarea></label>';
+    echo '<p class="muted">O sistema usa somente chaves gratuitas da API oficial. Quando uma chave bater quota, tenta a proxima automaticamente.</p>';
+    echo '<div class="form-actions"><button type="submit" name="action" value="save_youtube_settings">Salvar chaves</button></div>';
+    echo '</form>';
+    echo '</section>';
 }
 
 function updates_page(SettingsRepository $settingsRepo): void
@@ -1026,6 +1055,7 @@ function status_badge(string $status): string
         'pending' => 'pendente',
         'idle' => 'ocioso',
         'running' => 'rodando',
+        'quota_wait' => 'aguardando quota',
         'completed' => 'concluido',
         'failed' => 'falhou',
         'draft' => 'rascunho',
@@ -1132,6 +1162,9 @@ function progress_text(array $progress, bool $autoRun): string
     if ((string) ($progress['status'] ?? '') === 'failed') {
         return 'Processamento interrompido. Veja o erro no historico abaixo.';
     }
+    if ((string) ($progress['status'] ?? '') === 'quota_wait') {
+        return 'Todas as chaves gratuitas atingiram quota. O sistema vai tentar novamente mais tarde.';
+    }
 
     if ($autoRun) {
         return 'Processando lote automaticamente...';
@@ -1158,8 +1191,8 @@ function friendly_exception_message(Throwable $exception): string
     $message = trim($exception->getMessage());
     $lower = strtolower($message);
 
-    if (str_contains($lower, 'quota')) {
-        return 'A quota da API do YouTube acabou ou foi limitada. Aguarde a renovacao da quota ou use outra chave.';
+    if (str_contains($lower, 'quota') || str_contains($lower, 'chaves gratuitas')) {
+        return 'Todas as chaves gratuitas do YouTube atingiram quota ou limite temporario. O sistema pausou a busca e tentara novamente depois.';
     }
     if (str_contains($lower, 'api key') || str_contains($lower, 'keyinvalid') || str_contains($lower, 'forbidden')) {
         return 'A chave da API do YouTube foi recusada. Confira se a YouTube Data API v3 esta ativa e se a chave esta correta.';
@@ -1187,6 +1220,23 @@ function split_keywords_input(string $value): array
     }
 
     return array_values($keywords);
+}
+
+/**
+ * @return array<int, string>
+ */
+function youtube_keys_input(string $value): array
+{
+    $parts = preg_split('/[\s,;]+/', $value) ?: [];
+    $keys = [];
+    foreach ($parts as $part) {
+        $key = trim($part);
+        if ($key !== '') {
+            $keys[$key] = $key;
+        }
+    }
+
+    return array_values($keys);
 }
 
 function truncate_text(?string $value, int $limit = 120): string

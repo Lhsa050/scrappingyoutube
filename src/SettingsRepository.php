@@ -36,6 +36,25 @@ final class SettingsRepository
     }
 
     /**
+     * @return array<int, string>
+     */
+    public function youtubeApiKeys(): array
+    {
+        $settings = $this->all();
+        $raw = (string) ($settings['youtube_api_keys'] ?? '');
+        $parts = preg_split('/[\s,;]+/', $raw) ?: [];
+        $keys = [];
+        foreach ($parts as $part) {
+            $key = trim($part);
+            if ($key !== '') {
+                $keys[$key] = $key;
+            }
+        }
+
+        return array_values($keys);
+    }
+
+    /**
      * @param array<string, string> $values
      */
     public function save(array $values): void
@@ -64,6 +83,11 @@ final class SettingsRepository
      */
     public function defaults(): array
     {
+        $youtubeKeys = (string) Config::get('YOUTUBE_API_KEYS', '');
+        if (trim($youtubeKeys) === '') {
+            $youtubeKeys = (string) Config::get('YOUTUBE_API_KEY', '');
+        }
+
         return [
             'smtp_host' => (string) Config::get('SMTP_HOST', 'smtp.hostinger.com'),
             'smtp_port' => (string) Config::int('SMTP_PORT', 465),
@@ -74,6 +98,7 @@ final class SettingsRepository
             'mail_from_name' => (string) Config::get('MAIL_FROM_NAME', 'Sua Marca'),
             'mail_reply_to' => (string) Config::get('MAIL_REPLY_TO', ''),
             'emails_per_run' => (string) Config::int('EMAILS_PER_RUN', 20),
+            'youtube_api_keys' => $youtubeKeys,
             'update_manifest_url' => (string) Config::get('UPDATE_MANIFEST_URL', ''),
             'github_repo' => (string) Config::get('GITHUB_REPO', 'Lhsa050/scrappingyoutube'),
             'github_branch' => (string) Config::get('GITHUB_BRANCH', 'main'),
