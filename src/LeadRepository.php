@@ -238,7 +238,11 @@ final class LeadRepository
         $title = (string) ($snippet['channelTitle'] ?? 'Canal sem titulo');
         $thumbnail = $snippet['thumbnails']['default']['url'] ?? null;
         $statistics = $channel['statistics'] ?? [];
-        $subscriberCount = array_key_exists('subscriberCount', $statistics) ? (int) $statistics['subscriberCount'] : null;
+        $subscriberCount = array_key_exists('subscriberCount', $statistics)
+            && $statistics['subscriberCount'] !== null
+            && $statistics['subscriberCount'] !== ''
+            ? (int) $statistics['subscriberCount']
+            : null;
         $subscribersHidden = !empty($statistics['hiddenSubscriberCount']) ? 1 : 0;
 
         $stmt = $this->pdo->prepare('SELECT id FROM channels WHERE youtube_channel_id = :youtube_channel_id');

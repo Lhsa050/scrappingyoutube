@@ -139,6 +139,7 @@ Modos disponiveis:
 - `Somente scraping publico`: ignora chaves e busca por paginas publicas do YouTube.
 
 No scraping publico, cada pagina usa uma variacao da consulta para ampliar a descoberta sem gastar quota da API. Isso permite volume muito maior, mas ainda depende da disponibilidade das paginas publicas do YouTube e dos limites da hospedagem.
+Quando o limite de inscritos esta ativo e os inscritos do canal nao puderem ser confirmados, o canal e ignorado para evitar falso positivo em buscas de canais pequenos.
 
 Durante a busca:
 

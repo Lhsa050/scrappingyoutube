@@ -285,13 +285,20 @@ final class YouTubeClient
     private function publicVideos(array $ids): array
     {
         $videos = [];
+        $errors = [];
         foreach (array_slice($ids, 0, 50) as $id) {
             if (isset($this->publicVideoCache[$id])) {
                 $videos[] = $this->publicVideoCache[$id];
                 continue;
             }
 
-            $html = $this->httpGetPublic(self::WATCH_URL . rawurlencode($id));
+            try {
+                $html = $this->httpGetPublic(self::WATCH_URL . rawurlencode($id));
+            } catch (RuntimeException $exception) {
+                $errors[] = $exception->getMessage();
+                continue;
+            }
+
             $description = $this->jsonStringValue($html, 'shortDescription');
             $title = $this->jsonStringValue($html, 'title') ?: $this->htmlTitle($html);
             $author = $this->jsonStringValue($html, 'author') ?: 'Canal sem titulo';
@@ -305,8 +312,8 @@ final class YouTubeClient
                 'id' => $channelId,
                 'snippet' => ['title' => $author],
                 'statistics' => [
-                    'subscriberCount' => $subscriberCount ?? 0,
-                    'hiddenSubscriberCount' => false,
+                    'subscriberCount' => $subscriberCount,
+                    'hiddenSubscriberCount' => $subscriberCount === null,
                     'subscriberCountEstimated' => $subscriberCount === null,
                 ],
             ];
@@ -329,6 +336,10 @@ final class YouTubeClient
             ];
             $this->publicVideoCache[$id] = $video;
             $videos[] = $video;
+        }
+
+        if ($videos === [] && $errors !== []) {
+            throw new RuntimeException('Scraping publico nao conseguiu abrir os videos encontrados. ' . $errors[0]);
         }
 
         return $videos;
