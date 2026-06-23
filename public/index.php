@@ -104,26 +104,31 @@ function handle_post_actions(
     $action = post_string('action');
 
     if ($page === 'jobs' && $action === 'create_job') {
-        if (post_string('niche') === '' || post_string('keywords') === '') {
+        $keywords = split_keywords_input(post_string('keywords'));
+        if (post_string('niche') === '' || $keywords === []) {
             throw new RuntimeException('Informe nicho e palavras-chave para criar a busca.');
         }
 
         $categoryId = $leadRepo->categoryId(post_string('category', 'Geral'));
         $publishedAfter = post_string('published_after');
-        $leadRepo->createScrapeJob([
-            'niche' => post_string('niche'),
-            'keywords' => post_string('keywords'),
-            'category_id' => $categoryId,
-            'min_views' => max(0, post_int('min_views', 0)),
-            'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
-            'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
-            'max_pages' => min(20, max(1, post_int('max_pages', 1))),
-            'region_code' => strtoupper(post_string('region_code', 'BR')),
-            'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
-            'order_by' => post_string('order_by', 'relevance'),
-            'published_after' => $publishedAfter === '' ? null : $publishedAfter . ' 00:00:00',
-        ]);
-        flash('Busca criada. O cron vai processar uma pagina por execucao.');
+        $created = 0;
+        foreach ($keywords as $keyword) {
+            $leadRepo->createScrapeJob([
+                'niche' => post_string('niche'),
+                'keywords' => $keyword,
+                'category_id' => $categoryId,
+                'min_views' => max(0, post_int('min_views', 0)),
+                'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
+                'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
+                'max_pages' => min(20, max(1, post_int('max_pages', 1))),
+                'region_code' => strtoupper(post_string('region_code', 'BR')),
+                'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
+                'order_by' => post_string('order_by', 'relevance'),
+                'published_after' => $publishedAfter === '' ? null : $publishedAfter . ' 00:00:00',
+            ]);
+            $created++;
+        }
+        flash($created . ' busca(s) criada(s). O cron vai processar uma pagina por execucao.');
         redirect('?page=jobs');
     }
 
@@ -395,7 +400,7 @@ function jobs_page(LeadRepository $repo, array $categories): void
     echo '<form method="post" class="form-grid">';
     echo csrf_field() . '<input type="hidden" name="action" value="create_job">';
     input('Nicho', 'niche', 'Dicas de financas');
-    input('Palavras-chave', 'keywords', 'financas pessoais investimentos renda extra');
+    textarea_field('Palavras-chave, uma por linha', 'keywords', "financas pessoais\ninvestimentos para iniciantes\nrenda extra", 5);
     input('Categoria', 'category', 'Financas');
     input('Views minimas', 'min_views', '10000', 'number');
     input('Views maximas', 'max_views', '100000', 'number');
@@ -421,7 +426,7 @@ function jobs_table(array $jobs, bool $actions): void
         echo '<td>#' . h((string) $job['id']) . '</td>';
         $maxSubscribers = empty($job['max_subscribers']) ? 'sem teto' : 'ate ' . format_int((int) $job['max_subscribers']) . ' inscritos';
         $maxViews = empty($job['max_views']) ? 'sem teto de views' : 'ate ' . format_int((int) $job['max_views']) . ' views';
-        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
+        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) $job['keywords']) . '</span><span>' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
         echo '<td>' . status_badge((string) $job['status']);
         if (!empty($job['error_message'])) {
             echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
@@ -756,6 +761,11 @@ function input(string $label, string $name, string $value = '', string $type = '
     echo '<label>' . h($label) . '<input type="' . h($type) . '" name="' . h($name) . '" value="' . h($value) . '"></label>';
 }
 
+function textarea_field(string $label, string $name, string $value = '', int $rows = 4): void
+{
+    echo '<label class="wide">' . h($label) . '<textarea name="' . h($name) . '" rows="' . h((string) $rows) . '">' . h($value) . '</textarea></label>';
+}
+
 function settings_input(string $label, string $name, string $value = '', string $type = 'text'): void
 {
     $placeholder = in_array($name, ['smtp_password', 'github_token'], true) ? 'Preencha somente se quiser alterar' : '';
@@ -836,6 +846,24 @@ function subscriber_label(array $row): string
     }
 
     return format_int((int) $row['subscriber_count']) . ' inscritos';
+}
+
+/**
+ * @return array<int, string>
+ */
+function split_keywords_input(string $value): array
+{
+    $lines = preg_split('/\R+/', $value) ?: [];
+    $keywords = [];
+    foreach ($lines as $line) {
+        $keyword = trim($line);
+        if ($keyword === '') {
+            continue;
+        }
+        $keywords[strtolower($keyword)] = $keyword;
+    }
+
+    return array_values($keywords);
 }
 
 function truncate_text(?string $value, int $limit = 120): string

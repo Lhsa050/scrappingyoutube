@@ -127,7 +127,10 @@ Se o repositorio for privado, crie um token GitHub com permissao de leitura de c
 1. Entre no painel.
 2. Crie uma busca em `Buscas`, por exemplo:
    - Nicho: `Dicas de financas`
-   - Palavras-chave: `financas pessoais investimentos renda extra`
+   - Palavras-chave: uma por linha, separadas com Enter
+     - `financas pessoais`
+     - `investimentos para iniciantes`
+     - `renda extra`
    - Views minimas: `10000`
    - Views maximas: `100000`
    - Inscritos maximos: `30000`
