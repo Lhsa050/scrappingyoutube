@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS channels (
   youtube_channel_id TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
   thumbnail_url TEXT NULL,
+  subscriber_count INTEGER NULL,
+  subscribers_hidden INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   category_id INTEGER NOT NULL,
   min_views INTEGER NOT NULL DEFAULT 0,
   max_views INTEGER NULL,
+  max_subscribers INTEGER NULL,
   max_pages INTEGER NOT NULL DEFAULT 1,
   region_code TEXT NULL,
   relevance_language TEXT NULL,

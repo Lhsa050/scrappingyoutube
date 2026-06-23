@@ -55,6 +55,21 @@ final class ScrapeService
             }
 
             $videos = $this->youtube->videos($ids);
+            $channelIds = [];
+            foreach ($videos as $video) {
+                $channelId = (string) ($video['snippet']['channelId'] ?? '');
+                if ($channelId !== '') {
+                    $channelIds[] = $channelId;
+                }
+            }
+            $channelsById = [];
+            foreach ($this->youtube->channels($channelIds) as $channel) {
+                $id = (string) ($channel['id'] ?? '');
+                if ($id !== '') {
+                    $channelsById[$id] = $channel;
+                }
+            }
+
             $checked = 0;
             $emailsFound = 0;
 
@@ -70,13 +85,20 @@ final class ScrapeService
                 }
 
                 $snippet = $video['snippet'] ?? [];
+                $youtubeChannelId = (string) ($snippet['channelId'] ?? '');
+                $channel = $channelsById[$youtubeChannelId] ?? [];
+                $maxSubscribers = $job['max_subscribers'] === null ? null : (int) $job['max_subscribers'];
+                if ($maxSubscribers !== null && $maxSubscribers > 0 && !$this->channelIsInsideSubscriberLimit($channel, $maxSubscribers)) {
+                    continue;
+                }
+
                 $description = (string) ($snippet['description'] ?? '');
                 $emails = $this->extractor->extract($description);
                 if ($emails === []) {
                     continue;
                 }
 
-                $channelId = $this->leads->upsertChannel($snippet);
+                $channelId = $this->leads->upsertChannel($snippet, $channel);
                 $videoId = $this->leads->upsertVideo($video, $channelId);
                 $sourceUrl = 'https://www.youtube.com/watch?v=' . rawurlencode((string) $video['id']);
 
@@ -114,5 +136,19 @@ final class ScrapeService
             ]);
             throw $exception;
         }
+    }
+
+    private function channelIsInsideSubscriberLimit(array $channel, int $maxSubscribers): bool
+    {
+        $statistics = $channel['statistics'] ?? [];
+        if (!is_array($statistics) || !empty($statistics['hiddenSubscriberCount'])) {
+            return false;
+        }
+
+        if (!array_key_exists('subscriberCount', $statistics)) {
+            return false;
+        }
+
+        return (int) $statistics['subscriberCount'] <= $maxSubscribers;
     }
 }

@@ -116,6 +116,7 @@ function handle_post_actions(
             'category_id' => $categoryId,
             'min_views' => max(0, post_int('min_views', 0)),
             'max_views' => post_string('max_views') === '' ? null : max(0, post_int('max_views')),
+            'max_subscribers' => post_string('max_subscribers') === '' ? null : max(0, post_int('max_subscribers', 30000)),
             'max_pages' => min(20, max(1, post_int('max_pages', 1))),
             'region_code' => strtoupper(post_string('region_code', 'BR')),
             'relevance_language' => strtolower(post_string('relevance_language', 'pt')),
@@ -398,6 +399,7 @@ function jobs_page(LeadRepository $repo, array $categories): void
     input('Categoria', 'category', 'Financas');
     input('Views minimas', 'min_views', '10000', 'number');
     input('Views maximas', 'max_views', '100000', 'number');
+    input('Inscritos maximos', 'max_subscribers', '30000', 'number');
     input('Paginas', 'max_pages', '3', 'number');
     select_field('Ordenacao', 'order_by', ['relevance' => 'Relevancia', 'viewCount' => 'Mais vistos', 'date' => 'Recentes'], 'relevance');
     input('Pais', 'region_code', 'BR');
@@ -417,7 +419,9 @@ function jobs_table(array $jobs, bool $actions): void
     foreach ($jobs as $job) {
         echo '<tr>';
         echo '<td>#' . h((string) $job['id']) . '</td>';
-        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) ($job['category_name'] ?? '')) . '</span></td>';
+        $maxSubscribers = empty($job['max_subscribers']) ? 'sem teto' : 'ate ' . format_int((int) $job['max_subscribers']) . ' inscritos';
+        $maxViews = empty($job['max_views']) ? 'sem teto de views' : 'ate ' . format_int((int) $job['max_views']) . ' views';
+        echo '<td><strong>' . h((string) $job['niche']) . '</strong><span>' . h((string) ($job['category_name'] ?? '')) . ' - ' . h($maxSubscribers) . ' - ' . h($maxViews) . '</span></td>';
         echo '<td>' . status_badge((string) $job['status']);
         if (!empty($job['error_message'])) {
             echo '<span class="error-line">' . h(truncate_text((string) $job['error_message'], 90)) . '</span>';
@@ -495,7 +499,7 @@ function leads_table(array $leads, bool $actions): void
             echo '<span class="status blocked">bloqueado</span>';
         }
         echo '</td>';
-        echo '<td><strong>' . h((string) $lead['category_name']) . '</strong><span>' . h((string) $lead['channel_title']) . '</span></td>';
+        echo '<td><strong>' . h((string) $lead['category_name']) . '</strong><span>' . h((string) $lead['channel_title']) . '</span><span>' . h(subscriber_label($lead)) . '</span></td>';
         echo '<td><strong>' . h(format_int((int) ($lead['source_count'] ?? 0))) . ' fonte(s)</strong>';
         echo '<span>' . h(truncate_text((string) ($lead['latest_video_title'] ?? ''), 80)) . '</span>';
         if ($sourceUrl !== '') {
@@ -545,6 +549,7 @@ function lead_detail_page(LeadRepository $repo): void
     echo '<dl class="detail-list">';
     echo '<dt>Categoria</dt><dd>' . h((string) $lead['category_name']) . '</dd>';
     echo '<dt>Canal</dt><dd>' . h((string) $lead['channel_title']) . '</dd>';
+    echo '<dt>Inscritos</dt><dd>' . h(subscriber_label($lead)) . '</dd>';
     echo '<dt>Primeiro achado</dt><dd>' . h(format_date((string) $lead['first_seen_at'])) . '</dd>';
     echo '<dt>Ultimo achado</dt><dd>' . h(format_date((string) $lead['last_seen_at'])) . '</dd>';
     echo '<dt>Ultimo contato</dt><dd>' . h(format_date((string) ($lead['last_contacted_at'] ?? ''))) . '</dd>';
@@ -818,6 +823,19 @@ function format_date(?string $value): string
     }
 
     return date('d/m/Y H:i', $timestamp);
+}
+
+function subscriber_label(array $row): string
+{
+    if (!empty($row['subscribers_hidden'])) {
+        return 'inscritos ocultos';
+    }
+
+    if (($row['subscriber_count'] ?? null) === null || (string) $row['subscriber_count'] === '') {
+        return 'inscritos nao informados';
+    }
+
+    return format_int((int) $row['subscriber_count']) . ' inscritos';
 }
 
 function truncate_text(?string $value, int $limit = 120): string

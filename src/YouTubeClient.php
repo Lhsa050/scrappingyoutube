@@ -55,6 +55,26 @@ final class YouTubeClient
     }
 
     /**
+     * @param array<int, string> $ids
+     * @return array<int, array<string, mixed>>
+     */
+    public function channels(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter($ids)));
+        if ($ids === []) {
+            return [];
+        }
+
+        $response = $this->request('channels', [
+            'part' => 'statistics',
+            'id' => implode(',', array_slice($ids, 0, 50)),
+            'key' => $this->apiKey,
+        ]);
+
+        return $response['items'] ?? [];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function request(string $endpoint, array $params): array

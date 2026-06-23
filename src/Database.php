@@ -49,6 +49,10 @@ final class Database
             self::pdo()->exec($statement);
         }
 
+        self::ensureColumn('channels', 'subscriber_count', Config::dbConnection() === 'mysql' ? 'BIGINT UNSIGNED NULL' : 'INTEGER NULL');
+        self::ensureColumn('channels', 'subscribers_hidden', Config::dbConnection() === 'mysql' ? 'TINYINT(1) NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('scrape_jobs', 'max_subscribers', Config::dbConnection() === 'mysql' ? 'BIGINT UNSIGNED NULL' : 'INTEGER NULL');
+
         self::$migrated = true;
     }
 
@@ -60,5 +64,32 @@ final class Database
     public static function lastInsertId(): int
     {
         return (int) self::pdo()->lastInsertId();
+    }
+
+    private static function ensureColumn(string $table, string $column, string $definition): void
+    {
+        if (self::columnExists($table, $column)) {
+            return;
+        }
+
+        self::pdo()->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
+    }
+
+    private static function columnExists(string $table, string $column): bool
+    {
+        if (Config::dbConnection() === 'mysql') {
+            $quotedColumn = self::pdo()->quote($column);
+            $stmt = self::pdo()->query("SHOW COLUMNS FROM {$table} LIKE {$quotedColumn}");
+            return $stmt->fetchColumn() !== false;
+        }
+
+        $stmt = self::pdo()->query("PRAGMA table_info({$table})");
+        foreach ($stmt->fetchAll() as $row) {
+            if (($row['name'] ?? '') === $column) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

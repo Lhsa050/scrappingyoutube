@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS channels (
   youtube_channel_id VARCHAR(80) NOT NULL UNIQUE,
   title VARCHAR(255) NOT NULL,
   thumbnail_url TEXT NULL,
+  subscriber_count BIGINT UNSIGNED NULL,
+  subscribers_hidden TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   category_id INT UNSIGNED NOT NULL,
   min_views BIGINT UNSIGNED NOT NULL DEFAULT 0,
   max_views BIGINT UNSIGNED NULL,
+  max_subscribers BIGINT UNSIGNED NULL,
   max_pages INT UNSIGNED NOT NULL DEFAULT 1,
   region_code VARCHAR(5) NULL,
   relevance_language VARCHAR(8) NULL,

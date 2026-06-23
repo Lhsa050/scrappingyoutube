@@ -5,7 +5,7 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 ## O que esta pronto
 
 - Busca por palavra-chave/nicho usando a YouTube Data API v3 oficial.
-- Filtros de views minimas e maximas, pais, idioma, ordenacao e data minima.
+- Filtros de views minimas e maximas, inscritos maximos do canal, pais, idioma, ordenacao e data minima.
 - Extracao de e-mails presentes em descricoes publicas dos videos.
 - Banco com categorias, canais, videos, leads e origem do achado.
 - Controle de leads com status, notas, fontes por video, exclusao individual, limpeza geral, bloqueio manual e exportacao CSV.
@@ -130,6 +130,7 @@ Se o repositorio for privado, crie um token GitHub com permissao de leitura de c
    - Palavras-chave: `financas pessoais investimentos renda extra`
    - Views minimas: `10000`
    - Views maximas: `100000`
+   - Inscritos maximos: `30000`
 3. Rode manualmente pelo botao `Rodar` ou aguarde o cron.
 4. Revise os leads em `Leads`, abra `Detalhes`, qualifique contatos bons e ignore ou bloqueie contatos que nao devem receber campanha.
 5. Configure SMTP em `Configuracoes`.

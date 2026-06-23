@@ -46,9 +46,9 @@ final class LeadRepository
         $now = Database::now();
         $stmt = $this->pdo->prepare(
             'INSERT INTO scrape_jobs
-             (niche, keywords, category_id, min_views, max_views, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
+             (niche, keywords, category_id, min_views, max_views, max_subscribers, max_pages, region_code, relevance_language, order_by, published_after, status, created_at, updated_at)
              VALUES
-             (:niche, :keywords, :category_id, :min_views, :max_views, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
+             (:niche, :keywords, :category_id, :min_views, :max_views, :max_subscribers, :max_pages, :region_code, :relevance_language, :order_by, :published_after, :status, :created_at, :updated_at)'
         );
         $stmt->execute([
             'niche' => $data['niche'],
@@ -56,6 +56,7 @@ final class LeadRepository
             'category_id' => $data['category_id'],
             'min_views' => $data['min_views'],
             'max_views' => $data['max_views'],
+            'max_subscribers' => $data['max_subscribers'],
             'max_pages' => $data['max_pages'],
             'region_code' => $data['region_code'],
             'relevance_language' => $data['relevance_language'],
@@ -117,12 +118,15 @@ final class LeadRepository
         $stmt->execute($data);
     }
 
-    public function upsertChannel(array $snippet): int
+    public function upsertChannel(array $snippet, array $channel = []): int
     {
         $now = Database::now();
         $youtubeChannelId = (string) ($snippet['channelId'] ?? '');
         $title = (string) ($snippet['channelTitle'] ?? 'Canal sem titulo');
         $thumbnail = $snippet['thumbnails']['default']['url'] ?? null;
+        $statistics = $channel['statistics'] ?? [];
+        $subscriberCount = array_key_exists('subscriberCount', $statistics) ? (int) $statistics['subscriberCount'] : null;
+        $subscribersHidden = !empty($statistics['hiddenSubscriberCount']) ? 1 : 0;
 
         $stmt = $this->pdo->prepare('SELECT id FROM channels WHERE youtube_channel_id = :youtube_channel_id');
         $stmt->execute(['youtube_channel_id' => $youtubeChannelId]);
@@ -130,11 +134,16 @@ final class LeadRepository
 
         if ($id !== false) {
             $stmt = $this->pdo->prepare(
-                'UPDATE channels SET title = :title, thumbnail_url = :thumbnail_url, updated_at = :updated_at WHERE id = :id'
+                'UPDATE channels
+                 SET title = :title, thumbnail_url = :thumbnail_url, subscriber_count = :subscriber_count,
+                     subscribers_hidden = :subscribers_hidden, updated_at = :updated_at
+                 WHERE id = :id'
             );
             $stmt->execute([
                 'title' => $title,
                 'thumbnail_url' => $thumbnail,
+                'subscriber_count' => $subscriberCount,
+                'subscribers_hidden' => $subscribersHidden,
                 'updated_at' => $now,
                 'id' => $id,
             ]);
@@ -142,13 +151,17 @@ final class LeadRepository
         }
 
         $stmt = $this->pdo->prepare(
-            'INSERT INTO channels (youtube_channel_id, title, thumbnail_url, created_at, updated_at)
-             VALUES (:youtube_channel_id, :title, :thumbnail_url, :created_at, :updated_at)'
+            'INSERT INTO channels
+             (youtube_channel_id, title, thumbnail_url, subscriber_count, subscribers_hidden, created_at, updated_at)
+             VALUES
+             (:youtube_channel_id, :title, :thumbnail_url, :subscriber_count, :subscribers_hidden, :created_at, :updated_at)'
         );
         $stmt->execute([
             'youtube_channel_id' => $youtubeChannelId,
             'title' => $title,
             'thumbnail_url' => $thumbnail,
+            'subscriber_count' => $subscriberCount,
+            'subscribers_hidden' => $subscribersHidden,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -302,6 +315,7 @@ final class LeadRepository
     {
         [$where, $params] = $this->leadWhere($filters);
         $sql = 'SELECT l.*, c.name AS category_name, ch.title AS channel_title,
+                       ch.subscriber_count, ch.subscribers_hidden,
                        (SELECT COUNT(*)
                         FROM lead_sources ls
                         WHERE ls.lead_id = l.id) AS source_count,
@@ -343,6 +357,7 @@ final class LeadRepository
     {
         $stmt = $this->pdo->prepare(
             'SELECT l.*, c.name AS category_name, ch.title AS channel_title, ch.youtube_channel_id, ch.thumbnail_url,
+                    ch.subscriber_count, ch.subscribers_hidden,
                     (SELECT COUNT(*) FROM lead_sources ls WHERE ls.lead_id = l.id) AS source_count,
                     (SELECT COUNT(*) FROM email_queue q WHERE q.lead_id = l.id) AS queue_total,
                     (SELECT COUNT(*) FROM email_queue q WHERE q.lead_id = l.id AND q.status = \'sent\') AS sent_total,
@@ -417,7 +432,8 @@ final class LeadRepository
     {
         [$where, $params] = $this->leadWhere($filters);
         $stmt = $this->pdo->prepare(
-            'SELECT l.email, c.name AS category, ch.title AS channel, l.status, l.first_seen_at, l.last_seen_at, l.last_contacted_at, l.unsubscribed_at,
+            'SELECT l.email, c.name AS category, ch.title AS channel, ch.subscriber_count, ch.subscribers_hidden,
+                    l.status, l.first_seen_at, l.last_seen_at, l.last_contacted_at, l.unsubscribed_at,
                     (SELECT COUNT(*) FROM lead_sources ls WHERE ls.lead_id = l.id) AS source_count,
                     (SELECT ls.source_url FROM lead_sources ls WHERE ls.lead_id = l.id ORDER BY ls.id DESC LIMIT 1) AS latest_source_url
              FROM leads l
@@ -432,7 +448,7 @@ final class LeadRepository
         header('Content-Disposition: attachment; filename="leads-youtube.csv"');
         $out = fopen('php://output', 'wb');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['email', 'categoria', 'canal', 'status', 'primeiro_achado', 'ultimo_achado', 'ultimo_contato', 'descadastro', 'fontes', 'ultima_url']);
+        fputcsv($out, ['email', 'categoria', 'canal', 'inscritos', 'inscritos_ocultos', 'status', 'primeiro_achado', 'ultimo_achado', 'ultimo_contato', 'descadastro', 'fontes', 'ultima_url']);
         while ($row = $stmt->fetch()) {
             fputcsv($out, $row);
         }
