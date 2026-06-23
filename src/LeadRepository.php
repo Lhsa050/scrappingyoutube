@@ -4,8 +4,26 @@ declare(strict_types=1);
 
 final class LeadRepository
 {
-    public function __construct(private readonly PDO $pdo)
+    public function __construct(private PDO $pdo)
     {
+    }
+
+    public function reconnect(): void
+    {
+        $this->pdo = Database::reconnect();
+    }
+
+    public function ensureConnection(): void
+    {
+        try {
+            $this->pdo->query('SELECT 1');
+        } catch (PDOException $exception) {
+            if (!Database::isConnectionLost($exception)) {
+                throw $exception;
+            }
+
+            $this->reconnect();
+        }
     }
 
     public function categoryId(string $name): int

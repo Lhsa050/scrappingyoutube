@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('ac
             new YouTubeClient($settingsRepo->youtubeApiKeys(), (string) $settingsRepo->get('youtube_provider', 'auto')),
             new EmailExtractor()
         );
-        json_response(['ok' => true] + $service->processBatch(null, 4, 25, $batchId === '' ? null : $batchId));
+        json_response(['ok' => true] + $service->processBatch(null, 1, 22, $batchId === '' ? null : $batchId));
     } catch (Throwable $exception) {
         $progress = $leadRepo->jobProgressSummary($batchId === '' ? null : $batchId);
         $progress['status'] = 'failed';
@@ -1258,6 +1258,9 @@ function friendly_exception_message(Throwable $exception): string
     }
     if (str_contains($lower, 'unknown column') || str_contains($lower, 'no such column')) {
         return 'O banco ainda nao tem uma coluna exigida por esta versao. Reaplique a atualizacao pelo painel para rodar a migracao automatica.';
+    }
+    if (str_contains($lower, 'server has gone away') || str_contains($lower, 'lost connection') || str_contains($lower, 'general error: 2006')) {
+        return 'A conexao MySQL caiu durante a busca. A nova versao divide o scraping em rodadas menores e reconecta automaticamente antes de salvar.';
     }
 
     return $message !== '' ? $message : 'Falha inesperada ao processar a busca.';

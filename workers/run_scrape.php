@@ -13,10 +13,10 @@ $service = new ScrapeService(
 );
 
 $jobId = isset($argv[1]) ? (int) $argv[1] : null;
-$maxSteps = isset($argv[2]) ? max(1, (int) $argv[2]) : 12;
+$maxSteps = isset($argv[2]) ? max(1, (int) $argv[2]) : 3;
 
 try {
-    $result = $service->processBatch($jobId, $maxSteps, 90);
+    $result = $service->processBatch($jobId, $maxSteps, 55);
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL;
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception->getMessage() . PHP_EOL);

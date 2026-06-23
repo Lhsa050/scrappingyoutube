@@ -18,6 +18,7 @@ final class ScrapeService
      */
     public function process(?int $jobId = null, ?string $batchId = null): array
     {
+        $this->leads->ensureConnection();
         $job = $this->leads->nextRunnableJob($jobId, $batchId);
         if (!$job) {
             return ['job_id' => 0, 'status' => 'idle', 'videos_checked' => 0, 'emails_found' => 0];
@@ -45,7 +46,7 @@ final class ScrapeService
                 'regionCode' => $job['region_code'] ?? null,
                 'relevanceLanguage' => $job['relevance_language'] ?? null,
                 'publishedAfter' => $publishedAfter,
-                'maxResults' => 50,
+                'maxResults' => 10,
             ]);
 
             $ids = [];
@@ -70,6 +71,7 @@ final class ScrapeService
                     $channelsById[$id] = $channel;
                 }
             }
+            $this->leads->ensureConnection();
 
             $checked = 0;
             $emailsFound = 0;
@@ -127,6 +129,7 @@ final class ScrapeService
             $nextToken = (string) ($search['nextPageToken'] ?? '');
             $finished = $nextToken === '' || $pagesProcessed >= (int) $job['max_pages'];
 
+            $this->leads->ensureConnection();
             $this->leads->updateJob((int) $job['id'], [
                 'status' => $finished ? 'completed' : 'running',
                 'next_page_token' => $finished ? null : $nextToken,
@@ -143,6 +146,10 @@ final class ScrapeService
                 'emails_found' => $emailsFound,
             ];
         } catch (Throwable $exception) {
+            if (Database::isConnectionLost($exception)) {
+                $this->leads->reconnect();
+            }
+
             if ($this->isQuotaPause($exception)) {
                 $this->leads->updateJob((int) $job['id'], [
                     'status' => 'quota_wait',

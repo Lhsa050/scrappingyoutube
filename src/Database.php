@@ -30,6 +30,21 @@ final class Database
         return self::$pdo;
     }
 
+    public static function reconnect(): PDO
+    {
+        self::$pdo = null;
+        return self::pdo();
+    }
+
+    public static function isConnectionLost(Throwable $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+        return str_contains($message, 'server has gone away')
+            || str_contains($message, 'lost connection')
+            || str_contains($message, 'error: 2006')
+            || str_contains($message, 'general error: 2006');
+    }
+
     public static function migrate(bool $force = false): void
     {
         if (self::$migrated && !$force) {

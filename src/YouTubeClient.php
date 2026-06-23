@@ -561,8 +561,8 @@ final class YouTubeClient
             $curl = curl_init($url);
             curl_setopt_array($curl, [
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT => 35,
-                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_TIMEOUT => 18,
+                CURLOPT_CONNECTTIMEOUT => 6,
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
                 CURLOPT_HTTPHEADER => [
@@ -585,7 +585,7 @@ final class YouTubeClient
 
         $context = stream_context_create([
             'http' => [
-                'timeout' => 35,
+                'timeout' => 18,
                 'ignore_errors' => true,
                 'header' => "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36\r\nAccept-Language: pt-BR,pt;q=0.9,en;q=0.8\r\n",
             ],
