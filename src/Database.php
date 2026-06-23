@@ -59,6 +59,13 @@ final class Database
         self::ensureColumn('scrape_jobs', 'match_mode', Config::dbConnection() === 'mysql' ? 'VARCHAR(20) NOT NULL DEFAULT \'any\'' : 'TEXT NOT NULL DEFAULT \'any\'');
         self::ensureColumn('scrape_jobs', 'max_subscribers', Config::dbConnection() === 'mysql' ? 'BIGINT UNSIGNED NULL' : 'INTEGER NULL');
         self::ensureColumn('scrape_jobs', 'video_type', Config::dbConnection() === 'mysql' ? 'VARCHAR(20) NOT NULL DEFAULT \'both\'' : 'TEXT NOT NULL DEFAULT \'both\'');
+        self::ensureColumn('scrape_jobs', 'next_page_token', Config::dbConnection() === 'mysql' ? 'VARCHAR(100) NULL' : 'TEXT NULL');
+        self::ensureColumn('scrape_jobs', 'pages_processed', Config::dbConnection() === 'mysql' ? 'INT UNSIGNED NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('scrape_jobs', 'videos_checked', Config::dbConnection() === 'mysql' ? 'INT UNSIGNED NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('scrape_jobs', 'emails_found', Config::dbConnection() === 'mysql' ? 'INT UNSIGNED NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        self::ensureColumn('scrape_jobs', 'error_message', Config::dbConnection() === 'mysql' ? 'TEXT NULL' : 'TEXT NULL');
+        self::ensureColumn('scrape_jobs', 'started_at', Config::dbConnection() === 'mysql' ? 'DATETIME NULL' : 'TEXT NULL');
+        self::ensureColumn('scrape_jobs', 'finished_at', Config::dbConnection() === 'mysql' ? 'DATETIME NULL' : 'TEXT NULL');
         self::ensureColumn('scrape_jobs', 'quota_retry_at', Config::dbConnection() === 'mysql' ? 'DATETIME NULL' : 'TEXT NULL');
 
         self::$migrated = true;

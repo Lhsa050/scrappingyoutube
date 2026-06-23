@@ -94,20 +94,24 @@ try {
 $categories = $leadRepo->categories();
 app_header($page);
 
-if ($page === 'jobs') {
-    jobs_page($leadRepo, $categories);
-} elseif ($page === 'leads') {
-    leads_page($leadRepo, $categories);
-} elseif ($page === 'lead') {
-    lead_detail_page($leadRepo);
-} elseif ($page === 'campaigns') {
-    campaigns_page($campaignRepo, $categories);
-} elseif ($page === 'settings') {
-    settings_page($settingsRepo);
-} elseif ($page === 'updates') {
-    updates_page($settingsRepo);
-} else {
-    dashboard_page($leadRepo, $campaignRepo);
+try {
+    if ($page === 'jobs') {
+        jobs_page($leadRepo, $categories);
+    } elseif ($page === 'leads') {
+        leads_page($leadRepo, $categories);
+    } elseif ($page === 'lead') {
+        lead_detail_page($leadRepo);
+    } elseif ($page === 'campaigns') {
+        campaigns_page($campaignRepo, $categories);
+    } elseif ($page === 'settings') {
+        settings_page($settingsRepo);
+    } elseif ($page === 'updates') {
+        updates_page($settingsRepo);
+    } else {
+        dashboard_page($leadRepo, $campaignRepo);
+    }
+} catch (Throwable $exception) {
+    page_error($exception);
 }
 
 app_footer();
@@ -393,6 +397,16 @@ function app_header(string $active): void
 function app_footer(): void
 {
     echo '</main></body></html>';
+}
+
+function page_error(Throwable $exception): void
+{
+    echo '<section class="topbar"><div><p class="eyebrow">Falha operacional</p><h1>Esta pagina encontrou um erro</h1></div></section>';
+    echo '<section class="panel error-panel">';
+    echo '<div class="panel-head"><h2>Motivo</h2><span class="status failed">erro</span></div>';
+    echo '<p>' . h(friendly_exception_message($exception)) . '</p>';
+    echo '<p class="muted">Tente atualizar a pagina. Se continuar, abra Atualizacoes, busque a versao mais recente e aplique novamente.</p>';
+    echo '</section>';
 }
 
 function json_response(array $payload): never
@@ -1241,6 +1255,9 @@ function friendly_exception_message(Throwable $exception): string
     }
     if (str_contains($lower, 'falha http')) {
         return 'Falha ao consultar o YouTube. Confira a chave da API, quota e conexao da hospedagem.';
+    }
+    if (str_contains($lower, 'unknown column') || str_contains($lower, 'no such column')) {
+        return 'O banco ainda nao tem uma coluna exigida por esta versao. Reaplique a atualizacao pelo painel para rodar a migracao automatica.';
     }
 
     return $message !== '' ? $message : 'Falha inesperada ao processar a busca.';
