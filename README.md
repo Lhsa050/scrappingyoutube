@@ -89,7 +89,7 @@ Envio de e-mails, por exemplo a cada 5 ou 10 minutos:
 
 Controle o volume no painel em `Configuracoes`. Comece baixo, como `10` ou `20`, e aumente somente depois de validar entregabilidade.
 
-## Atualizacoes pelo GitHub
+## Atualizacoes automaticas pelo GitHub
 
 A fonte oficial de atualizacoes e o repositorio GitHub:
 
@@ -97,7 +97,7 @@ A fonte oficial de atualizacoes e o repositorio GitHub:
 https://github.com/Lhsa050/scrappingyoutube
 ```
 
-O painel consulta o arquivo `VERSION` no GitHub e compara com o `VERSION` instalado na hospedagem.
+O painel consulta o arquivo `VERSION` no GitHub, compara com o `VERSION` instalado na hospedagem e aplica a atualizacao automaticamente.
 
 Fluxo:
 
@@ -109,10 +109,16 @@ Fluxo:
    - Branch: `main`
    - Token GitHub: somente se o repositorio for privado
 5. Clique em `Buscar atualizacoes`.
-6. Se houver nova versao, baixe o ZIP do GitHub.
-7. Extraia o ZIP e envie o conteudo da pasta extraida para `public_html`, substituindo arquivos existentes.
-8. Nao apague `.env` nem `storage`.
-9. Depois abra `/repair.php`, digite a senha admin e clique em reparar para conferir arquivos, permissoes e banco.
+6. Se houver nova versao, clique em `Atualizar agora`.
+
+O atualizador automatico vai:
+
+- baixar o ZIP oficial da branch no GitHub;
+- criar backup dos arquivos substituidos em `storage/backups`;
+- preservar `.env`, `storage` e arquivos internos do Git;
+- copiar os arquivos novos para a instalacao;
+- rodar a migracao do banco;
+- validar se o arquivo `VERSION` foi atualizado.
 
 Se o repositorio for privado, crie um token GitHub com permissao de leitura de conteudo e salve no painel em `Atualizacoes`.
 

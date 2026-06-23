@@ -70,7 +70,7 @@ final class UpdaterService
 
         $currentVersion = $this->currentVersion();
         $available = version_compare($latestVersion, $currentVersion, '>');
-        $packageUrl = 'https://github.com/' . $repo . '/archive/refs/heads/' . rawurlencode($branch) . '.zip';
+        $packageUrl = 'https://api.github.com/repos/' . $repo . '/zipball/' . rawurlencode($branch);
 
         return [
             'current_version' => $currentVersion,
@@ -86,6 +86,7 @@ final class UpdaterService
                 'source' => 'github',
                 'repo' => $repo,
                 'branch' => $branch,
+                'requires_sha256' => false,
             ],
             'manifest_url' => 'https://github.com/' . $repo,
         ];
@@ -166,10 +167,11 @@ final class UpdaterService
         $manifest = $check['manifest'];
         $packageUrl = (string) ($manifest['package_url'] ?? '');
         $expectedHash = strtolower((string) ($manifest['sha256'] ?? ''));
+        $source = (string) ($manifest['source'] ?? '');
         if ($packageUrl === '') {
             throw new RuntimeException('Manifesto invalido: campo package_url ausente.');
         }
-        if ($expectedHash === '' || !preg_match('/^[a-f0-9]{64}$/', $expectedHash)) {
+        if ($source !== 'github' && ($expectedHash === '' || !preg_match('/^[a-f0-9]{64}$/', $expectedHash))) {
             throw new RuntimeException('Manifesto invalido: sha256 ausente ou invalido.');
         }
         if (!class_exists('ZipArchive')) {
@@ -180,16 +182,25 @@ final class UpdaterService
         $zipPath = $this->storage . '/package-' . $version . '.zip';
         $extractPath = $this->storage . '/extract-' . $version . '-' . date('YmdHis');
         $backupPath = $this->root . '/storage/backups/update-' . date('YmdHis');
+        $headers = [];
+        if ($source === 'github') {
+            $headers = $this->githubHeaders(trim((string) $this->settings->get('github_token', '')));
+        }
 
-        $this->download($packageUrl, $zipPath);
+        $this->download($packageUrl, $zipPath, $headers);
         $actualHash = hash_file('sha256', $zipPath);
-        if (!hash_equals($expectedHash, strtolower((string) $actualHash))) {
+        if ($expectedHash !== '' && !hash_equals($expectedHash, strtolower((string) $actualHash))) {
             throw new RuntimeException('SHA-256 do pacote nao confere. Atualizacao interrompida.');
         }
 
         $this->extract($zipPath, $extractPath);
         $this->applyPackage($extractPath, $backupPath, (array) ($manifest['delete'] ?? []));
         Database::migrate(true);
+        $installedVersion = $this->currentVersion();
+        if (version_compare($installedVersion, (string) $manifest['version'], '<')) {
+            throw new RuntimeException('Os arquivos foram copiados, mas a versao instalada ainda aparece como ' . $installedVersion . '. Verifique permissoes do arquivo VERSION.');
+        }
+        $this->removeDirectory($extractPath);
 
         return [
             'updated' => true,
@@ -197,6 +208,22 @@ final class UpdaterService
             'version' => (string) $manifest['version'],
             'backup_path' => $backupPath,
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function githubHeaders(string $token): array
+    {
+        $headers = [
+            'Accept: application/vnd.github+json',
+            'X-GitHub-Api-Version: 2022-11-28',
+        ];
+        if ($token !== '') {
+            $headers[] = 'Authorization: Bearer ' . $token;
+        }
+
+        return $headers;
     }
 
     /**
@@ -221,9 +248,16 @@ final class UpdaterService
         return $manifest;
     }
 
-    private function download(string $url, string $targetPath): void
+    private function download(string $url, string $targetPath, array $headers = []): void
     {
-        $body = $this->httpGet($url);
+        $body = $this->httpGet($url, $headers);
+        if (strlen($body) < 100) {
+            throw new RuntimeException('O pacote baixado esta vazio ou incompleto.');
+        }
+        if (substr($body, 0, 2) !== 'PK') {
+            $preview = trim(strip_tags(substr($body, 0, 300)));
+            throw new RuntimeException('GitHub nao respondeu um ZIP valido. Resposta recebida: ' . $preview);
+        }
         if (file_put_contents($targetPath, $body, LOCK_EX) === false) {
             throw new RuntimeException('Nao foi possivel salvar o pacote de atualizacao.');
         }
@@ -243,6 +277,7 @@ final class UpdaterService
                 CURLOPT_TIMEOUT => 60,
                 CURLOPT_CONNECTTIMEOUT => 15,
                 CURLOPT_USERAGENT => 'CreatorOutreachUpdater/' . $this->currentVersion(),
+                CURLOPT_UNRESTRICTED_AUTH => true,
             ]);
             if ($headers !== []) {
                 curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
@@ -253,7 +288,8 @@ final class UpdaterService
             curl_close($curl);
 
             if ($body === false || $status >= 400) {
-                throw new RuntimeException($error !== '' ? $error : 'Falha HTTP ao baixar atualizacao.');
+                $message = $error !== '' ? $error : 'Falha HTTP ao baixar atualizacao. HTTP ' . $status;
+                throw new RuntimeException($message);
             }
 
             return (string) $body;
@@ -305,6 +341,7 @@ final class UpdaterService
     {
         $sourceRoot = $this->packageRoot($extractPath);
         $files = $this->listFiles($sourceRoot);
+        $this->assertWritablePlan($sourceRoot, $files);
 
         foreach ($deleteList as $relativePath) {
             $relativePath = $this->normalizeRelativePath((string) $relativePath);
@@ -344,10 +381,53 @@ final class UpdaterService
                 throw new RuntimeException('Falha ao preparar arquivo atualizado: ' . $relativePath . ' (' . ($error['message'] ?? 'sem detalhe') . ')');
             }
             if (!@rename($tempTarget, $target)) {
+                if (!@copy($tempTarget, $target)) {
+                    @unlink($tempTarget);
+                    $error = error_get_last();
+                    throw new RuntimeException('Falha ao copiar arquivo atualizado: ' . $relativePath . ' (' . ($error['message'] ?? 'sem detalhe') . ')');
+                }
                 @unlink($tempTarget);
-                $error = error_get_last();
-                throw new RuntimeException('Falha ao copiar arquivo atualizado: ' . $relativePath . ' (' . ($error['message'] ?? 'sem detalhe') . ')');
             }
+        }
+    }
+
+    /**
+     * @param array<int, string> $files
+     */
+    private function assertWritablePlan(string $sourceRoot, array $files): void
+    {
+        $blocked = [];
+        foreach ($files as $file) {
+            $relativePath = $this->normalizeRelativePath(substr($file, strlen($sourceRoot) + 1));
+            if ($relativePath === '' || $this->isProtectedPath($relativePath)) {
+                continue;
+            }
+
+            $target = $this->root . '/' . $relativePath;
+            $targetDir = dirname($target);
+            $existingDir = $targetDir;
+            while (!is_dir($existingDir) && dirname($existingDir) !== $existingDir) {
+                $existingDir = dirname($existingDir);
+            }
+
+            if (is_file($target) && !is_writable($target)) {
+                @chmod($target, 0644);
+            }
+            if (is_dir($existingDir) && !is_writable($existingDir)) {
+                @chmod($existingDir, 0755);
+            }
+
+            if (is_file($target) && !is_writable($target)) {
+                $blocked[] = $relativePath;
+                continue;
+            }
+            if (!is_file($target) && is_dir($existingDir) && !is_writable($existingDir)) {
+                $blocked[] = $relativePath;
+            }
+        }
+
+        if ($blocked !== []) {
+            throw new RuntimeException('Sem permissao para atualizar estes arquivos: ' . implode(', ', array_slice($blocked, 0, 8)));
         }
     }
 
@@ -392,6 +472,28 @@ final class UpdaterService
             mkdir($backupDir, 0755, true);
         }
         copy($target, $backupTarget);
+    }
+
+    private function removeDirectory(string $path): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+            }
+        }
+
+        @rmdir($path);
     }
 
     private function normalizeRelativePath(string $path): string

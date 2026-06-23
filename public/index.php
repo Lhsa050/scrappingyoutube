@@ -225,6 +225,15 @@ function handle_post_actions(
         redirect('?page=settings');
     }
 
+    if ($page === 'updates' && $action === 'apply_update') {
+        $updater = new UpdaterService($settingsRepo);
+        $result = $updater->installLatest();
+        $_SESSION['update_result'] = $result;
+        unset($_SESSION['update_check']);
+        flash($result['updated'] ? 'Atualizacao aplicada com sucesso.' : (string) $result['message']);
+        redirect('?page=updates');
+    }
+
     if ($page === 'updates' && in_array($action, ['save_update_settings', 'check_updates'], true)) {
         $current = $settingsRepo->all();
         $githubRepo = post_string('github_repo', 'Lhsa050/scrappingyoutube');
@@ -250,6 +259,7 @@ function handle_post_actions(
 
         if ($action === 'check_updates') {
             $_SESSION['update_check'] = $updater->check();
+            unset($_SESSION['update_result']);
             flash($_SESSION['update_check']['available'] ? 'Atualizacao encontrada.' : 'Voce ja esta na versao mais recente.');
             redirect('?page=updates');
         }
@@ -647,8 +657,9 @@ function updates_page(SettingsRepository $settingsRepo): void
     $updater = new UpdaterService($settingsRepo);
     $settings = $settingsRepo->all();
     $check = $_SESSION['update_check'] ?? null;
+    $result = $_SESSION['update_result'] ?? null;
 
-    echo '<section class="topbar"><h1>Atualizacoes</h1><p>Verifique novas versoes direto no GitHub.</p></section>';
+    echo '<section class="topbar"><h1>Atualizacoes</h1><p>Busque e aplique novas versoes direto do GitHub.</p></section>';
 
     echo '<section class="metrics">';
     metric('Versao instalada', $updater->currentVersion());
@@ -667,6 +678,19 @@ function updates_page(SettingsRepository $settingsRepo): void
     echo '</form>';
     echo '</section>';
 
+    if (is_array($result)) {
+        echo '<section class="panel">';
+        echo '<div class="panel-head"><h2>Ultima atualizacao</h2>' . status_badge(!empty($result['updated']) ? 'completed' : 'pending') . '</div>';
+        echo '<p>' . h((string) ($result['message'] ?? '')) . '</p>';
+        if (!empty($result['version'])) {
+            echo '<p>Versao: <strong>' . h((string) $result['version']) . '</strong></p>';
+        }
+        if (!empty($result['backup_path'])) {
+            echo '<p>Backup criado em: <strong>' . h((string) $result['backup_path']) . '</strong></p>';
+        }
+        echo '</section>';
+    }
+
     if (is_array($check)) {
         $manifest = $check['manifest'];
         echo '<section class="panel">';
@@ -684,21 +708,12 @@ function updates_page(SettingsRepository $settingsRepo): void
             echo '</ul>';
         }
         if ($check['available']) {
-            $packageUrl = (string) ($manifest['package_url'] ?? '');
             echo '<div class="update-steps">';
-            echo '<p><strong>Metodo seguro:</strong> baixe o ZIP do GitHub, suba no Gerenciador de Arquivos da Hostinger e copie os arquivos por cima da instalacao.</p>';
-            if ($packageUrl !== '') {
-                echo '<p><a class="button" href="' . h($packageUrl) . '" target="_blank" rel="noopener">Baixar ZIP do GitHub</a></p>';
-            }
-            echo '<ol>';
-            echo '<li>Baixe o ZIP acima.</li>';
-            echo '<li>Extraia o ZIP no seu computador ou no Gerenciador de Arquivos.</li>';
-            echo '<li>Entre na pasta extraida do GitHub.</li>';
-            echo '<li>Envie o conteudo dessa pasta para <strong>public_html</strong>.</li>';
-            echo '<li>Se perguntar, escolha substituir arquivos existentes.</li>';
-            echo '<li>Nao apague <strong>.env</strong> nem <strong>storage</strong>.</li>';
-            echo '<li>Depois abra <strong>/repair.php</strong> uma vez para checar arquivos e banco.</li>';
-            echo '</ol>';
+            echo '<p><strong>Atualizacao automatica:</strong> o sistema vai baixar o ZIP oficial do GitHub, criar backup local, preservar <strong>.env</strong> e <strong>storage</strong>, copiar os arquivos e rodar a migracao do banco.</p>';
+            echo '<form method="post" class="form-actions split-actions">';
+            echo csrf_field();
+            echo '<button type="submit" name="action" value="apply_update">Atualizar agora</button>';
+            echo '</form>';
             echo '</div>';
         }
         echo '</section>';
