@@ -63,6 +63,20 @@ if ($page === 'leads' && ($_GET['export'] ?? '') === 'csv') {
     ]);
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $page === 'jobs' && post_string('action') === 'run_auto_batch') {
+    try {
+        $service = new ScrapeService(
+            $leadRepo,
+            new YouTubeClient((string) Config::get('YOUTUBE_API_KEY', '')),
+            new EmailExtractor()
+        );
+        json_response(['ok' => true] + $service->processBatch(null, 4, 25));
+    } catch (Throwable $exception) {
+        http_response_code(500);
+        json_response(['ok' => false, 'message' => $exception->getMessage()]);
+    }
+}
+
 try {
     handle_post_actions($page, $leadRepo, $campaignRepo, $settingsRepo);
 } catch (Throwable $exception) {
@@ -128,8 +142,8 @@ function handle_post_actions(
             ]);
             $created++;
         }
-        flash($created . ' busca(s) criada(s). O cron vai processar uma pagina por execucao.');
-        redirect('?page=jobs');
+        flash($created . ' busca(s) criada(s). O processamento automatico foi iniciado.');
+        redirect('?page=jobs&autorun=1');
     }
 
     if ($page === 'jobs' && $action === 'run_job') {
@@ -323,6 +337,13 @@ function app_footer(): void
     echo '</main></body></html>';
 }
 
+function json_response(array $payload): never
+{
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 function public_header(string $title): void
 {
     echo '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">';
@@ -395,6 +416,9 @@ function metric(string $label, string $value, string $detail = ''): void
 
 function jobs_page(LeadRepository $repo, array $categories): void
 {
+    $runnableJobs = $repo->runnableJobsCount();
+    $autoRun = $runnableJobs > 0;
+
     echo '<section class="topbar"><h1>Buscas no YouTube</h1><p>API oficial, filtros por views e origem registrada.</p></section>';
     echo '<section class="panel">';
     echo '<form method="post" class="form-grid">';
@@ -413,9 +437,17 @@ function jobs_page(LeadRepository $repo, array $categories): void
     echo '<div class="form-actions"><button type="submit">Criar busca</button></div>';
     echo '</form></section>';
 
+    echo '<section class="panel auto-runner" data-auto-runner="' . ($autoRun ? '1' : '0') . '" data-csrf="' . h(csrf_token()) . '">';
+    echo '<div class="panel-head"><h2>Processamento automatico</h2>' . status_badge($autoRun ? 'running' : 'completed') . '</div>';
+    echo '<p class="auto-runner-status">' . ($autoRun ? 'Rodando buscas pendentes automaticamente...' : 'Nenhuma busca pendente no momento.') . '</p>';
+    echo '<p class="muted">Voce pode deixar esta pagina aberta para processar ate o final. O cron tambem continua processando em segundo plano.</p>';
+    echo '</section>';
+
     echo '<section class="panel"><div class="panel-head"><h2>Historico</h2></div>';
     jobs_table($repo->recentJobs(30), true);
     echo '</section>';
+
+    auto_runner_script();
 }
 
 function jobs_table(array $jobs, bool $actions): void
@@ -445,6 +477,86 @@ function jobs_table(array $jobs, bool $actions): void
         echo '<tr><td colspan="7" class="empty">Nenhuma busca criada.</td></tr>';
     }
     echo '</tbody></table></div>';
+}
+
+function auto_runner_script(): void
+{
+    echo <<<'HTML'
+<script>
+(function () {
+  var panel = document.querySelector('[data-auto-runner="1"]');
+  if (!panel) {
+    return;
+  }
+
+  var status = panel.querySelector('.auto-runner-status');
+  var csrf = panel.getAttribute('data-csrf') || '';
+  var totalSteps = 0;
+  var totalVideos = 0;
+  var totalEmails = 0;
+  var stopped = false;
+
+  function setStatus(text) {
+    if (status) {
+      status.textContent = text;
+    }
+  }
+
+  function runBatch() {
+    if (stopped) {
+      return;
+    }
+
+    var body = new URLSearchParams();
+    body.set('action', 'run_auto_batch');
+    body.set('csrf_token', csrf);
+
+    fetch('?page=jobs', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: body.toString(),
+      credentials: 'same-origin'
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok || !data.ok) {
+            throw new Error(data.message || 'Falha ao processar busca.');
+          }
+          return data;
+        });
+      })
+      .then(function (data) {
+        totalSteps += Number(data.steps || 0);
+        totalVideos += Number(data.videos_checked || 0);
+        totalEmails += Number(data.emails_found || 0);
+
+        if (data.keep_running) {
+          setStatus('Rodando automaticamente... paginas: ' + totalSteps + ', videos: ' + totalVideos + ', e-mails: ' + totalEmails + '.');
+          window.setTimeout(runBatch, 900);
+          return;
+        }
+
+        stopped = true;
+        setStatus('Busca finalizada. Paginas processadas: ' + totalSteps + ', videos: ' + totalVideos + ', e-mails: ' + totalEmails + '.');
+        window.setTimeout(function () {
+          window.location.href = '?page=jobs';
+        }, 1200);
+      })
+      .catch(function (error) {
+        stopped = true;
+        panel.classList.add('auto-runner-error');
+        setStatus(error.message);
+      });
+  }
+
+  setStatus('Iniciando processamento automatico...');
+  runBatch();
+}());
+</script>
+HTML;
 }
 
 function leads_page(LeadRepository $repo, array $categories): void

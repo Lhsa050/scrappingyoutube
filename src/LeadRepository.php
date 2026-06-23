@@ -87,6 +87,13 @@ final class LeadRepository
         return $stmt->fetchAll();
     }
 
+    public function runnableJobsCount(): int
+    {
+        return (int) $this->pdo->query(
+            'SELECT COUNT(*) FROM scrape_jobs WHERE status IN (\'pending\', \'running\')'
+        )->fetchColumn();
+    }
+
     public function nextRunnableJob(?int $id = null): ?array
     {
         if ($id !== null) {

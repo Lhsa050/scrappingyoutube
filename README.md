@@ -10,6 +10,7 @@ Sistema PHP + MySQL para descobrir criadores no YouTube por nicho, coletar apena
 - Banco com categorias, canais, videos, leads e origem do achado.
 - Controle de leads com status, notas, fontes por video, exclusao individual, limpeza geral, bloqueio manual e exportacao CSV.
 - Dashboard operacional com leads ativos, qualificados, ignorados, fila, envios e falhas.
+- Processamento automatico das buscas pelo painel e por cron, sem precisar clicar em `Rodar` a cada pagina.
 - Campanhas com variaveis como `{{creator_name}}`, `{{niche}}`, `{{product_name}}`, `{{commission}}` e `{{unsubscribe_url}}`.
 - Fila de envio SMTP com limite por execucao.
 - Configuracao SMTP pelo painel, depois da instalacao.
@@ -134,7 +135,7 @@ Se o repositorio for privado, crie um token GitHub com permissao de leitura de c
    - Views minimas: `10000`
    - Views maximas: `100000`
    - Inscritos maximos: `30000`
-3. Rode manualmente pelo botao `Rodar` ou aguarde o cron.
+3. Depois de criar, a busca roda automaticamente pela tela. O cron tambem continua processando em lote se voce fechar o navegador.
 4. Revise os leads em `Leads`, abra `Detalhes`, qualifique contatos bons e ignore ou bloqueie contatos que nao devem receber campanha.
 5. Configure SMTP em `Configuracoes`.
 6. Crie uma campanha em `Campanhas`.

@@ -517,6 +517,25 @@ tr:last-child td {
   background: var(--surface-soft);
 }
 
+.auto-runner {
+  border-color: #cfe0d5;
+  background: #fbfdfb;
+}
+
+.auto-runner-status {
+  color: var(--accent-strong);
+  font-weight: 750;
+}
+
+.auto-runner-error {
+  border-color: #e8c6c6;
+  background: #fffafa;
+}
+
+.auto-runner-error .auto-runner-status {
+  color: var(--danger);
+}
+
 .context-block {
   margin: 12px 0 0;
   padding: 12px;
