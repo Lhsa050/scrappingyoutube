@@ -1,0 +1,327 @@
+<?php
+
+declare(strict_types=1);
+
+final class UpdaterService
+{
+    private string $root;
+    private string $storage;
+
+    public function __construct(private readonly SettingsRepository $settings)
+    {
+        $this->root = Config::root();
+        $this->storage = $this->root . '/storage/updates';
+        if (!is_dir($this->storage)) {
+            mkdir($this->storage, 0755, true);
+        }
+    }
+
+    public function currentVersion(): string
+    {
+        $versionFile = $this->root . '/VERSION';
+        if (!is_file($versionFile)) {
+            return '0.0.0';
+        }
+
+        return trim((string) file_get_contents($versionFile)) ?: '0.0.0';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function check(): array
+    {
+        $manifestUrl = trim((string) $this->settings->get('update_manifest_url', ''));
+        if ($manifestUrl === '') {
+            throw new RuntimeException('Configure a URL do manifesto de atualizacao em Configuracoes.');
+        }
+
+        $manifest = $this->fetchManifest($manifestUrl);
+        $latestVersion = (string) ($manifest['version'] ?? '');
+        if ($latestVersion === '') {
+            throw new RuntimeException('Manifesto invalido: campo version ausente.');
+        }
+
+        $currentVersion = $this->currentVersion();
+        $available = version_compare($latestVersion, $currentVersion, '>');
+
+        return [
+            'current_version' => $currentVersion,
+            'latest_version' => $latestVersion,
+            'available' => $available,
+            'manifest' => $manifest,
+            'manifest_url' => $manifestUrl,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function installLatest(): array
+    {
+        $check = $this->check();
+        if (!$check['available']) {
+            return [
+                'updated' => false,
+                'message' => 'Nenhuma atualizacao disponivel.',
+                'version' => $check['current_version'],
+            ];
+        }
+
+        $manifest = $check['manifest'];
+        $packageUrl = (string) ($manifest['package_url'] ?? '');
+        $expectedHash = strtolower((string) ($manifest['sha256'] ?? ''));
+        if ($packageUrl === '') {
+            throw new RuntimeException('Manifesto invalido: campo package_url ausente.');
+        }
+        if ($expectedHash === '' || !preg_match('/^[a-f0-9]{64}$/', $expectedHash)) {
+            throw new RuntimeException('Manifesto invalido: sha256 ausente ou invalido.');
+        }
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('A extensao PHP ZipArchive precisa estar habilitada para aplicar atualizacoes.');
+        }
+
+        $version = preg_replace('/[^0-9A-Za-z._-]/', '-', (string) $manifest['version']);
+        $zipPath = $this->storage . '/package-' . $version . '.zip';
+        $extractPath = $this->storage . '/extract-' . $version . '-' . date('YmdHis');
+        $backupPath = $this->root . '/storage/backups/update-' . date('YmdHis');
+
+        $this->download($packageUrl, $zipPath);
+        $actualHash = hash_file('sha256', $zipPath);
+        if (!hash_equals($expectedHash, strtolower((string) $actualHash))) {
+            throw new RuntimeException('SHA-256 do pacote nao confere. Atualizacao interrompida.');
+        }
+
+        $this->extract($zipPath, $extractPath);
+        $this->applyPackage($extractPath, $backupPath, (array) ($manifest['delete'] ?? []));
+        Database::migrate(true);
+
+        return [
+            'updated' => true,
+            'message' => 'Atualizacao aplicada com sucesso.',
+            'version' => (string) $manifest['version'],
+            'backup_path' => $backupPath,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchManifest(string $url): array
+    {
+        $body = $this->httpGet($url);
+        $body = preg_replace('/^\xEF\xBB\xBF/', '', $body) ?? $body;
+        $manifest = json_decode($body, true);
+        if (!is_array($manifest)) {
+            $preview = trim(strip_tags(substr($body, 0, 300)));
+            if (str_starts_with(ltrim($body), '<')) {
+                throw new RuntimeException(
+                    'A URL do manifesto respondeu HTML em vez de JSON. Verifique se o arquivo manifest.json existe na pasta publica updates. Resposta recebida: ' . $preview
+                );
+            }
+
+            throw new RuntimeException('Manifesto de atualizacao nao e um JSON valido.');
+        }
+
+        return $manifest;
+    }
+
+    private function download(string $url, string $targetPath): void
+    {
+        $body = $this->httpGet($url);
+        if (file_put_contents($targetPath, $body, LOCK_EX) === false) {
+            throw new RuntimeException('Nao foi possivel salvar o pacote de atualizacao.');
+        }
+    }
+
+    private function httpGet(string $url): string
+    {
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            throw new RuntimeException('URL de atualizacao invalida.');
+        }
+
+        if (function_exists('curl_init')) {
+            $curl = curl_init($url);
+            curl_setopt_array($curl, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 60,
+                CURLOPT_CONNECTTIMEOUT => 15,
+                CURLOPT_USERAGENT => 'CreatorOutreachUpdater/' . $this->currentVersion(),
+            ]);
+            $body = curl_exec($curl);
+            $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+            $error = curl_error($curl);
+            curl_close($curl);
+
+            if ($body === false || $status >= 400) {
+                throw new RuntimeException($error !== '' ? $error : 'Falha HTTP ao baixar atualizacao.');
+            }
+
+            return (string) $body;
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 60,
+                'header' => "User-Agent: CreatorOutreachUpdater/" . $this->currentVersion() . "\r\n",
+            ],
+        ]);
+        $body = file_get_contents($url, false, $context);
+        if ($body === false) {
+            throw new RuntimeException('Falha HTTP ao baixar atualizacao.');
+        }
+
+        return (string) $body;
+    }
+
+    private function extract(string $zipPath, string $targetPath): void
+    {
+        if (!is_dir($targetPath)) {
+            mkdir($targetPath, 0755, true);
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath) !== true) {
+            throw new RuntimeException('Nao foi possivel abrir o ZIP de atualizacao.');
+        }
+
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string) $zip->getNameIndex($i);
+            $this->assertSafeRelativePath($name);
+        }
+
+        if (!$zip->extractTo($targetPath)) {
+            $zip->close();
+            throw new RuntimeException('Nao foi possivel extrair o pacote de atualizacao.');
+        }
+        $zip->close();
+    }
+
+    /**
+     * @param array<int, string> $deleteList
+     */
+    private function applyPackage(string $extractPath, string $backupPath, array $deleteList): void
+    {
+        $sourceRoot = $this->packageRoot($extractPath);
+        $files = $this->listFiles($sourceRoot);
+
+        foreach ($deleteList as $relativePath) {
+            $relativePath = $this->normalizeRelativePath((string) $relativePath);
+            if ($relativePath === '' || $this->isProtectedPath($relativePath)) {
+                continue;
+            }
+            $target = $this->root . '/' . $relativePath;
+            $this->backupIfExists($target, $backupPath, $relativePath);
+            if (is_file($target)) {
+                unlink($target);
+            }
+        }
+
+        foreach ($files as $file) {
+            $relativePath = $this->normalizeRelativePath(substr($file, strlen($sourceRoot) + 1));
+            if ($relativePath === '' || $this->isProtectedPath($relativePath)) {
+                continue;
+            }
+
+            $target = $this->root . '/' . $relativePath;
+            $this->backupIfExists($target, $backupPath, $relativePath);
+            $targetDir = dirname($target);
+            if (!is_dir($targetDir)) {
+                mkdir($targetDir, 0755, true);
+            }
+
+            if (is_file($target) && !is_writable($target)) {
+                @chmod($target, 0644);
+            }
+            if (!is_writable($targetDir)) {
+                @chmod($targetDir, 0755);
+            }
+
+            $tempTarget = $target . '.updating';
+            if (!copy($file, $tempTarget)) {
+                $error = error_get_last();
+                throw new RuntimeException('Falha ao preparar arquivo atualizado: ' . $relativePath . ' (' . ($error['message'] ?? 'sem detalhe') . ')');
+            }
+            if (!@rename($tempTarget, $target)) {
+                @unlink($tempTarget);
+                $error = error_get_last();
+                throw new RuntimeException('Falha ao copiar arquivo atualizado: ' . $relativePath . ' (' . ($error['message'] ?? 'sem detalhe') . ')');
+            }
+        }
+    }
+
+    private function packageRoot(string $extractPath): string
+    {
+        $entries = array_values(array_filter(scandir($extractPath) ?: [], static fn ($item) => !in_array($item, ['.', '..'], true)));
+        if (count($entries) === 1 && is_dir($extractPath . '/' . $entries[0])) {
+            return $extractPath . '/' . $entries[0];
+        }
+
+        return $extractPath;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function listFiles(string $root): array
+    {
+        $files = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isFile()) {
+                $files[] = str_replace('\\', '/', $item->getPathname());
+            }
+        }
+
+        return $files;
+    }
+
+    private function backupIfExists(string $target, string $backupRoot, string $relativePath): void
+    {
+        if (!is_file($target)) {
+            return;
+        }
+
+        $backupTarget = $backupRoot . '/' . $relativePath;
+        $backupDir = dirname($backupTarget);
+        if (!is_dir($backupDir)) {
+            mkdir($backupDir, 0755, true);
+        }
+        copy($target, $backupTarget);
+    }
+
+    private function normalizeRelativePath(string $path): string
+    {
+        $path = str_replace('\\', '/', $path);
+        $path = ltrim($path, '/');
+        $this->assertSafeRelativePath($path);
+
+        return $path;
+    }
+
+    private function assertSafeRelativePath(string $path): void
+    {
+        $normalized = str_replace('\\', '/', $path);
+        if (
+            str_starts_with($normalized, '/') ||
+            preg_match('/^[A-Za-z]:\//', $normalized) ||
+            str_contains($normalized, '../') ||
+            str_contains($normalized, '..\\') ||
+            $normalized === '..'
+        ) {
+            throw new RuntimeException('Pacote contem caminho inseguro: ' . $path);
+        }
+    }
+
+    private function isProtectedPath(string $relativePath): bool
+    {
+        return $relativePath === '.env'
+            || str_starts_with($relativePath, 'storage/')
+            || str_starts_with($relativePath, '.git/')
+            || str_contains($relativePath, '/.git/');
+    }
+}
